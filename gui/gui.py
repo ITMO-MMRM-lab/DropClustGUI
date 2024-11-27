@@ -13,7 +13,7 @@ from PIL import Image, ImageEnhance, ImageQt
 from qtpy import QtCore
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QPixmap, QFont, QPalette
-from PyQt6.QtWidgets import QApplication, QMainWindow, QTableWidget, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QGridLayout, QSlider, QToolButton, QScrollArea, QCheckBox, QGraphicsOpacityEffect, QGroupBox, QComboBox, QPushButton, QProgressBar
+from PyQt6.QtWidgets import QApplication, QMainWindow, QTableWidget, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QGridLayout, QSlider, QToolButton, QScrollArea, QCheckBox, QGraphicsOpacityEffect, QGroupBox, QComboBox, QPushButton, QProgressBar, QLineEdit
 
 import gui_components
 from gui_components import addCustomSlider, extractFrames, ColorSlider, addFilter, countDroplets
@@ -183,6 +183,30 @@ class AppDemo(QMainWindow):
         b0 += 1
 
         b += 1
+
+        # Models group
+        self.models_box = QGroupBox("Models")
+        self.models_box_g = QGridLayout()
+        self.models_box.setLayout(self.models_box_g)
+        self.main_layout.addWidget(self.models_box, b, 0, 1, 1)
+
+        b0 = 0
+        self.diameter = 30
+        label = QLabel("diameter (pixels):")
+        label.setToolTip(
+            'you can manually enter the approximate diameter for your cells, \nor press “calibrate” to let the model estimate it. \nThe size is represented by a disk at the bottom of the view window \n(can turn this disk off by unchecking “scale disk on”)'
+        )
+        self.models_box_g.addWidget(label, b0, 0, 1, 4)
+        self.Diameter = QLineEdit()
+        self.Diameter.setToolTip(
+            'you can manually enter the approximate diameter for your cells, \nor press “calibrate” to let the "cyto3" model estimate it. \nThe size is represented by a disk at the bottom of the view window \n(can turn this disk off by unchecking “scale disk on”)'
+        )
+        self.Diameter.setText(str(self.diameter))
+        self.Diameter.returnPressed.connect(lambda: print("CEX"))
+        self.Diameter.setFixedWidth(50)
+        self.models_box_g.addWidget(self.Diameter, b0, 4, 1, 2)
+        b0 += 1
+
 
         ### ImageViewer
         # self.image_viewer = ImageLabel()

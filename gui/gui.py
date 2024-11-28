@@ -1,4 +1,4 @@
-import sys, os
+import sys, os, time
 sys.path.insert(1, '/home/mellamoarroz/Documents/drop_clus/')
 
 os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
@@ -16,6 +16,7 @@ from PyQt6.QtGui import QPixmap, QFont, QPalette
 from PyQt6.QtWidgets import QApplication, QMainWindow, QTableWidget, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QGridLayout, QSlider, QToolButton, QScrollArea, QCheckBox, QGraphicsOpacityEffect, QGroupBox, QComboBox, QPushButton, QProgressBar, QLineEdit
 
 import gui_components
+import models
 from gui_components import addCustomSlider, extractFrames, ColorSlider, addFilter, countDroplets
 from methods.methods import get_gray_img, pil_to_qpixmap
 
@@ -192,7 +193,7 @@ class AppDemo(QMainWindow):
 
         b0 = 0
         self.diameter = 30
-        label = QLabel("diameter (pixels):")
+        label = QLabel("Cell diameter (pixels):")
         label.setToolTip(
             'you can manually enter the approximate diameter for your cells, \nor press “calibrate” to let the model estimate it. \nThe size is represented by a disk at the bottom of the view window \n(can turn this disk off by unchecking “scale disk on”)'
         )
@@ -202,11 +203,75 @@ class AppDemo(QMainWindow):
             'you can manually enter the approximate diameter for your cells, \nor press “calibrate” to let the "cyto3" model estimate it. \nThe size is represented by a disk at the bottom of the view window \n(can turn this disk off by unchecking “scale disk on”)'
         )
         self.Diameter.setText(str(self.diameter))
-        self.Diameter.returnPressed.connect(lambda: print("CEX"))
+        self.Diameter.returnPressed.connect(self.compute_scale)
         self.Diameter.setFixedWidth(50)
         self.models_box_g.addWidget(self.Diameter, b0, 4, 1, 2)
+       
         b0 += 1
+        # choose channel
+        self.ChannelChoose = [QComboBox(), QComboBox()]
+        self.ChannelChoose[0].addItems(["0: gray", "1: red", "2: green", "3: blue"])
+        self.ChannelChoose[1].addItems(["0: none", "1: red", "2: green", "3: blue"])
+        cstr = ["chan to segment:", "chan2 (optional): "]
+        for i in range(2):
+            # self.ChannelChoose[i].setFont(self.medfont)
+            label = QLabel(cstr[i])
+            # label.setFont(self.medfont)
+            if i == 0:
+                label.setToolTip(
+                    "this is the channel in which the cytoplasm or nuclei exist that you want to segment"
+                )
+                self.ChannelChoose[i].setToolTip(
+                    "this is the channel in which the cytoplasm or nuclei exist that you want to segment"
+                )
+            else:
+                label.setToolTip(
+                    "if <em>cytoplasm</em> model is chosen, and you also have a nuclear channel, then choose the nuclear channel for this option"
+                )
+                self.ChannelChoose[i].setToolTip(
+                    "if <em>cytoplasm</em> model is chosen, and you also have a nuclear channel, then choose the nuclear channel for this option"
+                )
+            self.models_box_g.addWidget(label, b0 + i, 0, 1, 4)
+            self.models_box_g.addWidget(self.ChannelChoose[i], b0 + i, 4, 1, 5)
 
+        b0 += 2
+
+        # use GPU
+        self.useGPU = QCheckBox("use GPU")
+        self.useGPU.setToolTip(
+            "if you have specially installed the <i>cuda</i> version of torch, then you can activate this"
+        )
+        # self.useGPU.setFont(self.medfont)
+        self.check_gpu()
+        self.models_box_g.addWidget(self.useGPU, b0, 0, 1, 3)
+
+        # compute segmentation with general models
+        self.net_text = ["run cyto3"]
+        nett = ["cellpose super-generalist model"]
+
+        #label = QLabel("Run:")
+        #label.setFont(self.boldfont)
+        #label.setFont(self.medfont)
+        #self.segBoxG.addWidget(label, b0, 0, 1, 2)
+        self.StyleButtons = []
+        jj = 4
+        for j in range(len(self.net_text)):
+            self.StyleButtons.append(
+                gui_components.ModelButton(self, self.net_text[j], self.net_text[j]))
+            w = 5
+            self.models_box_g.addWidget(self.StyleButtons[-1], b0, jj, 1, w)
+            jj += w
+            #self.StyleButtons[-1].setFixedWidth(140)
+            self.StyleButtons[-1].setToolTip(nett[j])
+
+        b0 += 1
+        self.roi_count = QLabel("0 ROIs")
+        # self.roi_count.setFont(self.boldfont)
+        self.roi_count.setAlignment(QtCore.Qt.AlignLeft)
+        self.models_box_g.addWidget(self.roi_count, b0, 0, 1, 4)
+
+        self.progress = QProgressBar(self)
+        self.models_box_g.addWidget(self.progress, b0, 4, 1, 5)
 
         ### ImageViewer
         # self.image_viewer = ImageLabel()
@@ -346,6 +411,16 @@ class AppDemo(QMainWindow):
                 # if self.CHCheckBox.isChecked():
                 #     self.vLine.setPos(mousePoint.x())
                 #     self.hLine.setPos(mousePoint.y())
+
+    def check_gpu(self, torch=True):
+        # also decide whether or not to use torch
+        self.useGPU.setChecked(False)
+        self.useGPU.setEnabled(False)
+        if gui_components.use_gpu(use_torch=True):
+            self.useGPU.setEnabled(True)
+            self.useGPU.setChecked(True)
+        else:
+            self.useGPU.setStyleSheet("color: rgb(80,80,80);")
 
     def make_viewbox(self):
         self.p0 = gui_components.ViewBoxNoRightDrag(
@@ -505,9 +580,9 @@ class AppDemo(QMainWindow):
         # CP2.0 buttons disabled for now     
         # self.StyleToModel.setStyleSheet(self.styleUnpressed)
         # self.StyleToModel.setEnabled(True)
-        # for i in range(len(self.StyleButtons)):
-        #     self.StyleButtons[i].setEnabled(True)
-        #     self.StyleButtons[i].setStyleSheet(self.styleUnpressed)
+        for i in range(len(self.StyleButtons)):
+            self.StyleButtons[i].setEnabled(True)
+            # self.StyleButtons[i].setStyleSheet(self.styleUnpressed)
        
         # self.SizeButton.setEnabled(True)
         # self.SCheckBox.setEnabled(True)
@@ -561,20 +636,24 @@ class AppDemo(QMainWindow):
     #     self.roi_count.setText(f'{self.ncells} ROIs')
 
     def compute_scale(self):
-        self.diameter = 30.0 # float(self.Diameter.text())
-        self.pr = 30 # int(float(self.Diameter.text()))
-        self.radii_padding = int(self.pr*1.25)
-        self.radii = np.zeros((self.Ly+self.radii_padding,self.Lx,4), np.uint8)
-        yy,xx = gui_components.disk([self.Ly+self.radii_padding/2-1, self.pr/2+1],
-                            self.pr/2, self.Ly+self.radii_padding, self.Lx)
+        self.diameter = float(self.Diameter.text())
+        self.pr = int(float(self.Diameter.text()))
+        self.radii_padding = int(self.pr * 1.25)
+        self.radii = np.zeros((self.Ly + self.radii_padding, self.Lx, 4), np.uint8)
+        yy,xx = gui_components.disk([self.Ly + self.radii_padding / 2 - 1, self.pr / 2 + 1],
+                            self.pr / 2, self.Ly + self.radii_padding, self.Lx)
         # rgb(150,50,150)
         self.radii[yy,xx,0] = 255 # making red to correspond to tooltip
         self.radii[yy,xx,1] = 0
         self.radii[yy,xx,2] = 0
         self.radii[yy,xx,3] = 255
         # self.update_plot()
-        self.p0.setYRange(0,self.Ly+self.radii_padding)
-        self.p0.setXRange(0,self.Lx)
+        self.p0.setYRange(0, self.Ly + self.radii_padding)
+        self.p0.setXRange(0, self.Lx)
+
+        self.scale.setImage(self.radii, autoLevels=False)
+        self.scale.setLevels([0.0,255.0])
+
         self.image_viewer.show()
         self.show()
 
@@ -757,6 +836,124 @@ class AppDemo(QMainWindow):
     def set_tick_hover_color(self):
         for tick in self.hist.gradient.ticks:
             tick.hoverPen = pg.mkPen(self.accent,width=2)
+
+    def initialize_model(self, model_name=None, custom=False):
+        if model_name == "dataset-specific models":
+            raise ValueError("need to specify model (use dropdown)")
+        elif model_name is None or custom:
+            self.get_model_path(custom=custom)
+            if not os.path.exists(self.current_model_path):
+                raise ValueError("need to specify model (use dropdown)")
+
+        if model_name is None or not isinstance(model_name, str):
+            self.model = models.CellposeModel(gpu=self.useGPU.isChecked(),
+                                              pretrained_model=self.current_model_path)
+        else:
+            self.current_model = model_name
+            if self.current_model == "cyto" or self.current_model == "nuclei":
+                self.current_model_path = models.model_path(self.current_model, 0)
+            else:
+                self.current_model_path = os.fspath(
+                    models.MODEL_DIR.joinpath(self.current_model))
+
+            if self.current_model != "cyto3":
+                diam_mean = 17. if self.current_model == "nuclei" else 30.
+                self.model = models.CellposeModel(gpu=self.useGPU.isChecked(),
+                                                  diam_mean=diam_mean,
+                                                  model_type=self.current_model)
+            else:
+                self.model = models.Cellpose(gpu=self.useGPU.isChecked(),
+                                             model_type=self.current_model)
+
+    def compute_segmentation(self, custom=False, model_name=None, load_model=True):
+        self.progress.setValue(0)
+        try:
+            tic = time.time()
+            self.clear_all()
+            self.flows = [[], [], []]
+            if load_model:
+                self.initialize_model(model_name=model_name, custom=custom)
+            self.progress.setValue(10)
+            do_3D = self.load_3D
+            stitch_threshold = float(self.stitch_threshold.text()) if not isinstance(
+                self.stitch_threshold, float) else self.stitch_threshold
+            do_3D = False if stitch_threshold > 0. else do_3D
+
+            channels = self.get_channels()
+            if self.restore is not None and self.restore != "filter":
+                data = self.stack_filtered.copy().squeeze()
+            else:
+                data = self.stack.copy().squeeze()
+            flow_threshold, cellprob_threshold = self.get_thresholds()
+            self.diameter = float(self.Diameter.text())
+            niter = max(0, int(self.niter.text()))
+            niter = None if niter == 0 else niter
+            normalize_params = self.get_normalize_params()
+            print(normalize_params)
+            try:
+                masks, flows = self.model.eval(
+                    data, channels=channels, diameter=self.diameter,
+                    cellprob_threshold=cellprob_threshold,
+                    flow_threshold=flow_threshold, do_3D=do_3D, niter=niter,
+                    normalize=normalize_params, stitch_threshold=stitch_threshold,
+                    progress=self.progress)[:2]
+            except Exception as e:
+                print("NET ERROR: %s" % e)
+                self.progress.setValue(0)
+                return
+
+            self.progress.setValue(75)
+
+            # convert flows to uint8 and resize to original image size
+            flows_new = []
+            flows_new.append(flows[0].copy())  # RGB flow
+            flows_new.append((np.clip(normalize99(flows[2].copy()), 0, 1) *
+                              255).astype("uint8"))  # cellprob
+            if self.load_3D:
+                if stitch_threshold == 0.:
+                    flows_new.append((flows[1][0] / 10 * 127 + 127).astype("uint8"))
+                else:
+                    flows_new.append(np.zeros(flows[1][0].shape, dtype="uint8"))
+
+            if self.restore and "upsample" in self.restore:
+                self.Ly, self.Lx = self.Lyr, self.Lxr
+
+            if flows_new[0].shape[-3:-1] != (self.Ly, self.Lx):
+                self.flows = []
+                for j in range(len(flows_new)):
+                    self.flows.append(
+                        resize_image(flows_new[j], Ly=self.Ly, Lx=self.Lx,
+                                     interpolation=cv2.INTER_NEAREST))
+            else:
+                self.flows = flows_new
+
+            # add first axis
+            if self.NZ == 1:
+                masks = masks[np.newaxis, ...]
+                self.flows = [
+                    self.flows[n][np.newaxis, ...] for n in range(len(self.flows))
+                ]
+
+            self.logger.info("%d cells found with model in %0.3f sec" %
+                             (len(np.unique(masks)[1:]), time.time() - tic))
+            self.progress.setValue(80)
+            z = 0
+
+            io._masks_to_gui(self, masks, outlines=None)
+            self.masksOn = True
+            self.MCheckBox.setChecked(True)
+            self.keepMask.setEnabled(True)
+            self.saveMasks.setEnabled(True)
+
+            self.progress.setValue(100)
+            if self.restore != "filter" and self.restore is not None:
+                self.compute_saturation()
+            if not do_3D and not stitch_threshold > 0:
+                self.recompute_masks = True
+            else:
+                self.recompute_masks = False
+        except Exception as e:
+            print("ERROR: %s" % e)
 
 app = QApplication(sys.argv)
 

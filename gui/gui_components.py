@@ -12,10 +12,16 @@ from pyqtgraph import Point
 from qtpy import QtCore
 from PyQt6.QtCore import Qt, QSize, pyqtSignal
 from PyQt6.QtGui import QPixmap, QPainter
-from PyQt6.QtWidgets import QApplication, QMainWindow, QTableWidget, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QSlider, QToolButton, QFileDialog
+from PyQt6.QtWidgets import QApplication, QMainWindow, QTableWidget, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QSlider, QToolButton, QFileDialog, QPushButton
 from superqt import QRangeSlider, QLabeledDoubleRangeSlider, QLabeledRangeSlider
 from scipy.ndimage import find_objects
-from methods.methods import get_gray_img, pil_to_qpixmap
+from methods import get_gray_img, pil_to_qpixmap
+
+import torch
+from torch import nn
+from torch.utils import mkldnn as mkldnn_utils
+
+TORCH_ENABLED = True
 
 def imread(filename):
     ext = os.path.splitext(filename)[-1]
@@ -271,6 +277,57 @@ def disk(med, r, Ly, Lx):
     y = yy[inds].flatten()
     x = xx[inds].flatten()
     return y,x
+
+def use_gpu(gpu_number=0, use_torch=True):
+    """ 
+    Check if GPU is available for use.
+
+    Args:
+        gpu_number (int): The index of the GPU to be used. Default is 0.
+        use_torch (bool): Whether to use PyTorch for GPU check. Default is True.
+
+    Returns:
+        bool: True if GPU is available, False otherwise.
+
+    Raises:
+        ValueError: If use_torch is False, as cellpose only runs with PyTorch now.
+    """
+    if use_torch:
+        return _use_gpu_torch(gpu_number)
+    else:
+        raise ValueError("cellpose only runs with PyTorch now")
+
+
+def _use_gpu_torch(gpu_number=0):
+    """
+    Checks if CUDA is available and working with PyTorch.
+
+    Args:
+        gpu_number (int): The GPU device number to use (default is 0).
+
+    Returns:
+        bool: True if CUDA is available and working, False otherwise.
+    """
+    try:
+        device = torch.device("cuda:" + str(gpu_number))
+        _ = torch.zeros([1, 2, 3]).to(device)
+        # core_logger.info("** TORCH CUDA version installed and working. **")
+        return True
+    except:
+        # core_logger.info("TORCH CUDA version not installed/working.")
+        return False
+
+class ModelButton(QPushButton):
+    def __init__(self, parent, model_name, text):
+        super().__init__()
+        self.setEnabled(False)
+        self.setText(text)
+        # self.setFont(parent.boldfont)
+        self.clicked.connect(lambda: self.press(parent))
+        self.model_name = model_name if "cyto3" not in model_name else "cyto3"
+
+    def press(self, parent):
+        parent.compute_segmentation(model_name=self.model_name)
 
 class ColorSlider(QLabeledDoubleRangeSlider):
     def __init__(self, parent, name, color):

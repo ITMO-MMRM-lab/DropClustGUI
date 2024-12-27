@@ -15,7 +15,7 @@ from PyQt6.QtGui import QPixmap, QPainter
 from PyQt6.QtWidgets import QApplication, QMainWindow, QTableWidget, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QSlider, QToolButton, QFileDialog, QPushButton
 from superqt import QRangeSlider, QLabeledDoubleRangeSlider, QLabeledRangeSlider
 from scipy.ndimage import find_objects
-from methods import get_gray_img, pil_to_qpixmap
+from methods.methods import get_gray_img, pil_to_qpixmap
 
 import torch
 from torch import nn
@@ -321,13 +321,17 @@ class ModelButton(QPushButton):
     def __init__(self, parent, model_name, text):
         super().__init__()
         self.setEnabled(False)
+        # self.setStyleSheet(parent.styleInactive)
         self.setText(text)
-        # self.setFont(parent.boldfont)
+        # self.setFont(parent.smallfont)
         self.clicked.connect(lambda: self.press(parent))
-        self.model_name = model_name if "cyto3" not in model_name else "cyto3"
-
+        self.model_name = model_name
+        
     def press(self, parent):
-        parent.compute_segmentation(model_name=self.model_name)
+        # for i in range(len(parent.StyleButtons)):
+        #     parent.StyleButtons[i].setStyleSheet(parent.styleUnpressed)
+        # self.setStyleSheet(parent.stylePressed)
+        parent.compute_model()
 
 class ColorSlider(QLabeledDoubleRangeSlider):
     def __init__(self, parent, name, color):

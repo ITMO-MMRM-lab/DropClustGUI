@@ -6,7 +6,7 @@ import os
 import numpy as np
 import cv2
 from scipy.ndimage import gaussian_filter
-from . import utils, io, transforms
+import utils, io, transforms
 
 try:
     import matplotlib

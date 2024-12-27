@@ -16,7 +16,11 @@ from PyQt6.QtGui import QPixmap, QFont, QPalette
 from PyQt6.QtWidgets import QApplication, QMainWindow, QTableWidget, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QGridLayout, QSlider, QToolButton, QScrollArea, QCheckBox, QGraphicsOpacityEffect, QGroupBox, QComboBox, QPushButton, QProgressBar, QLineEdit
 
 import gui_components
-import models
+import models, core, dynamics
+import utils
+import iio
+from transforms import resize_image
+# from utils import to_8_bit
 from gui_components import addCustomSlider, extractFrames, ColorSlider, addFilter, countDroplets
 from methods.methods import get_gray_img, pil_to_qpixmap
 
@@ -25,6 +29,10 @@ try:
     MATPLOTLIB = True
 except:
     MATPLOTLIB = False
+
+
+OMNI_INSTALLED = 0
+DEFAULT_MODEL = 'cyto2'
 
 class ImageLabel(QLabel):
     def __init__(self):
@@ -64,11 +72,16 @@ class AppDemo(QMainWindow):
         self.masksOn = True
         self.gamma = 1.0
         self.darkmode = True
+        self.load_3D = False
+        self.ncolor = False
 
         builtin = pg.graphicsItems.GradientEditorItem.Gradients.keys()
         self.default_cmaps = ['grey','cyclic','magma','viridis']
         self.cmaps = self.default_cmaps+list(set(builtin) - set(self.default_cmaps))
 
+
+        self.model_strings = models.MODEL_NAMES.copy()
+        self.current_model = "cyto3"
 
         scrollable = 1 
         if scrollable:
@@ -192,6 +205,18 @@ class AppDemo(QMainWindow):
         self.main_layout.addWidget(self.models_box, b, 0, 1, 1)
 
         b0 = 0
+        # turn off masks
+        self.layer_off = False
+        self.masksOn = True
+        self.MCheckBox = QCheckBox('masks')
+        self.MCheckBox.setToolTip('Press X or M to toggle masks')
+        # self.MCheckBox.setStyleSheet(self.checkstyle)
+        # self.MCheckBox.setFont(self.medfont)
+        self.MCheckBox.setChecked(self.masksOn)
+        self.MCheckBox.toggled.connect(self.toggle_masks)
+        self.models_box_g.addWidget(self.MCheckBox, b0,0,1,2)
+
+        b0 += 1
         self.diameter = 30
         label = QLabel("Cell diameter (pixels):")
         label.setToolTip(
@@ -265,13 +290,27 @@ class AppDemo(QMainWindow):
             self.StyleButtons[-1].setToolTip(nett[j])
 
         b0 += 1
-        self.roi_count = QLabel("0 ROIs")
-        # self.roi_count.setFont(self.boldfont)
-        self.roi_count.setAlignment(QtCore.Qt.AlignLeft)
-        self.models_box_g.addWidget(self.roi_count, b0, 0, 1, 4)
-
         self.progress = QProgressBar(self)
         self.models_box_g.addWidget(self.progress, b0, 4, 1, 5)
+
+        self.roi_count = QLabel("0 ROIs")
+        # self.roi_count.setFont(self.boldfont)
+        self.roi_count.setAlignment(QtCore.Qt.AlignCenter)
+        self.models_box_g.addWidget(self.roi_count, b0, 6, 1, 7)
+
+        # MODEL DROPDOWN
+        b+=1
+        self.ModelChoose = QComboBox()
+        if len(self.model_strings) > len(models.MODEL_NAMES):
+            current_index = len(models.MODEL_NAMES)
+            # self.NetAvg.setCurrentIndex(1)
+        else:
+            current_index = models.MODEL_NAMES.index(DEFAULT_MODEL)
+        self.ModelChoose.addItems(self.model_strings) #added omnipose model names
+        # self.ModelChoose.setStyleSheet(self.dropdowns(width=WIDTH_5))
+        # self.ModelChoose.setFont(self.smallfont)
+        self.ModelChoose.setCurrentIndex(current_index)
+        self.models_box_g.addWidget(self.ModelChoose, b0, 0, 1, 4)
 
         ### ImageViewer
         # self.image_viewer = ImageLabel()
@@ -354,7 +393,8 @@ class AppDemo(QMainWindow):
         if os.path.splitext(files[0])[-1] == '.npy':
             io._load_seg(self, filename=files[0])
         else:
-            gui_components.loadImage(self, filename=files[0], load_seg=False)
+            iio._load_image(self, filename=files[0], load_seg=False)
+            # gui_components.loadImage(self, filename=files[0], load_seg=False)
 
     def setImage(self, file_path):
         file_ext = file_path.split('.')[1]
@@ -412,15 +452,58 @@ class AppDemo(QMainWindow):
                 #     self.vLine.setPos(mousePoint.x())
                 #     self.hLine.setPos(mousePoint.y())
 
-    def check_gpu(self, torch=True):
+    def check_gpu(self, use_torch=True):
         # also decide whether or not to use torch
+        self.torch = use_torch
         self.useGPU.setChecked(False)
-        self.useGPU.setEnabled(False)
-        if gui_components.use_gpu(use_torch=True):
+        self.useGPU.setEnabled(False)    
+        if self.torch and core.use_gpu(use_torch=True):
             self.useGPU.setEnabled(True)
             self.useGPU.setChecked(True)
         else:
             self.useGPU.setStyleSheet("color: rgb(80,80,80);")
+    
+    def get_channels(self):
+        channels = [self.ChannelChoose[0].currentIndex(), self.ChannelChoose[1].currentIndex()]
+        if self.current_model=='nuclei':
+            channels[1] = 0
+
+        # if self.nchan==1:
+        #     channels = None
+        return channels
+
+    def get_thresholds(self): 
+        try:
+            return self.threshslider.value(), self.probslider.value()
+        except Exception as e:
+            print('flow threshold or cellprob threshold not a valid number, setting to defaults')
+            self.flow_threshold.setText('0.0')
+            self.cellprob_threshold.setText('0.0')
+            return 0.0, 0.0
+
+    def toggle_masks(self):
+        if self.MCheckBox.isChecked():
+            self.masksOn = True
+            self.restore_masks = True
+        else:
+            self.masksOn = False
+            self.restore_masks = False
+            
+        # if self.OCheckBox.isChecked():
+        #     self.outlinesOn = True
+        # else:
+        #     self.outlinesOn = False
+        if not self.masksOn and False: #not self.outlinesOn:
+            self.p0.removeItem(self.layer)
+            self.layer_off = True
+        else:
+            if self.layer_off:
+                self.p0.addItem(self.layer)
+            self.draw_layer()
+            self.update_layer()
+        if self.loaded:
+            # self.update_plot()
+            self.update_layer()
 
     def make_viewbox(self):
         self.p0 = gui_components.ViewBoxNoRightDrag(
@@ -602,6 +685,12 @@ class AppDemo(QMainWindow):
         self.update_plot()
         self.setWindowTitle(self.filename)
 
+    def redraw_masks(self, masks=True, outlines=True, draw=True):
+        self.draw_layer()
+
+    def draw_masks(self):
+        self.draw_layer()
+
     def draw_layer(self):
         if self.masksOn and self.view==0: #disable masks for network outputs
             self.layerz = np.zeros((self.Ly,self.Lx,4), np.uint8)
@@ -628,12 +717,12 @@ class AppDemo(QMainWindow):
         self.layer.setImage(self.layerz, autoLevels=False)
             # self.layer.setImage(self.layerz[self.currentZ], autoLevels=False)
             
-        # self.update_roi_count()
+        self.update_roi_count()
         self.image_viewer.show()
         self.show()
 
-    # def update_roi_count(self):
-    #     self.roi_count.setText(f'{self.ncells} ROIs')
+    def update_roi_count(self):
+        self.roi_count.setText(f'{self.ncells} ROIs')
 
     def compute_scale(self):
         self.diameter = float(self.Diameter.text())
@@ -837,123 +926,204 @@ class AppDemo(QMainWindow):
         for tick in self.hist.gradient.ticks:
             tick.hoverPen = pg.mkPen(self.accent,width=2)
 
-    def initialize_model(self, model_name=None, custom=False):
-        if model_name == "dataset-specific models":
-            raise ValueError("need to specify model (use dropdown)")
-        elif model_name is None or custom:
-            self.get_model_path(custom=custom)
-            if not os.path.exists(self.current_model_path):
-                raise ValueError("need to specify model (use dropdown)")
+    def initialize_model(self):
+        self.get_model_path()
 
-        if model_name is None or not isinstance(model_name, str):
+
+        if self.current_model in models.MODEL_NAMES:
+
+            # make sure 2-channel models are initialized correctly
+            if self.current_model in models.C2_MODEL_NAMES:
+                self.nchan = 2
+                # self.ChanNumber.setText(str(self.nchan))
+
+            # ensure that the boundary/nclasses is set correctly
+            # self.boundary.setChecked(self.current_model in models.BD_MODEL_NAMES)
+            self.nclasses = 3 # 2 + self.boundary.isChecked()
+
+            # logger.info(f'Initializing model: nchan set to {self.nchan}, nclasses set to {self.nclasses}, dim set to {self.dim}')        
+
+            # if self.SizeModel.isChecked():
+            #     self.model = models.Cellpose(gpu=self.useGPU.isChecked(),
+            #                                  use_torch=self.torch,
+            #                                  model_type=self.current_model,
+            #                                  nchan=self.nchan,
+            #                                  nclasses=self.nclasses)
+            # else:
             self.model = models.CellposeModel(gpu=self.useGPU.isChecked(),
-                                              pretrained_model=self.current_model_path)
+                                                use_torch=self.torch,
+                                                model_type=self.current_model,                                             
+                                                nchan=self.nchan,
+                                                nclasses=self.nclasses)
         else:
-            self.current_model = model_name
-            if self.current_model == "cyto" or self.current_model == "nuclei":
-                self.current_model_path = models.model_path(self.current_model, 0)
-            else:
-                self.current_model_path = os.fspath(
-                    models.MODEL_DIR.joinpath(self.current_model))
+            self.nclasses = 3 # 2 + self.boundary.isChecked()
+            self.model = models.CellposeModel(gpu=self.useGPU.isChecked(), 
+                                              use_torch=True,
+                                              pretrained_model=self.current_model_path,                                             
+                                              nchan=self.nchan,
+                                              nclasses=self.nclasses)
 
-            if self.current_model != "cyto3":
-                diam_mean = 17. if self.current_model == "nuclei" else 30.
-                self.model = models.CellposeModel(gpu=self.useGPU.isChecked(),
-                                                  diam_mean=diam_mean,
-                                                  model_type=self.current_model)
-            else:
-                self.model = models.Cellpose(gpu=self.useGPU.isChecked(),
-                                             model_type=self.current_model)
+    def compute_model(self):
+        self.progress.setValue(10)
+        QApplication.processEvents() 
 
-    def compute_segmentation(self, custom=False, model_name=None, load_model=True):
-        self.progress.setValue(0)
         try:
-            tic = time.time()
+            tic=time.time()
             self.clear_all()
-            self.flows = [[], [], []]
-            if load_model:
-                self.initialize_model(model_name=model_name, custom=custom)
-            self.progress.setValue(10)
-            do_3D = self.load_3D
-            stitch_threshold = float(self.stitch_threshold.text()) if not isinstance(
-                self.stitch_threshold, float) else self.stitch_threshold
-            do_3D = False if stitch_threshold > 0. else do_3D
-
-            channels = self.get_channels()
-            if self.restore is not None and self.restore != "filter":
-                data = self.stack_filtered.copy().squeeze()
+            self.flows = [[],[],[]]
+            self.initialize_model()
+            # logger.info('using model %s'%self.current_model)
+            self.progress.setValue(20)
+            QApplication.processEvents() 
+            do_3D = False
+            if self.NZ > 1:
+                do_3D = True
+                data = self.stack.copy()
             else:
-                data = self.stack.copy().squeeze()
-            flow_threshold, cellprob_threshold = self.get_thresholds()
+                data = self.stack[0].copy() # maybe chanchoose here 
+            channels = self.get_channels()
             self.diameter = float(self.Diameter.text())
-            niter = max(0, int(self.niter.text()))
-            niter = None if niter == 0 else niter
-            normalize_params = self.get_normalize_params()
-            print(normalize_params)
+            
+            # print('heredebug',self.stack.shape,data.shape, channels)
+            
+            ### will either have to put in edge cases for worm etc or just generalize model loading to respect what is there 
             try:
-                masks, flows = self.model.eval(
-                    data, channels=channels, diameter=self.diameter,
-                    cellprob_threshold=cellprob_threshold,
-                    flow_threshold=flow_threshold, do_3D=do_3D, niter=niter,
-                    normalize=normalize_params, stitch_threshold=stitch_threshold,
-                    progress=self.progress)[:2]
+                omni_model = 'omni' in self.current_model
+                bacterial = 'bact' in self.current_model
+                # if omni_model or bacterial:
+                #     self.NetAvg.setCurrentIndex(1) #one run net
+                if bacterial:
+                    self.diameter = 0.
+                    self.Diameter.setText('%0.1f'%self.diameter)
+
+                # allow omni to be togged manually or forced by model
+                if OMNI_INSTALLED:
+                    if omni_model:
+                        print('GUI_INFO: turning on Omnipose mask recontruction version for Omnipose models (see menu)')
+                        if not self.omni.isChecked():
+                            print('WARNING: Omnipose models require Omnipose mask recontruction (toggle back on in menu)')
+                        if not self.cluster.isChecked():
+                            print(('NOTE: clutering algorithm can help with over-segmentation in thin cells.'
+                                   'Default is ON with omnipose models (see menu)'))
+                            
+                    elif self.omni.isChecked():
+                        print('NOTE: using Omnipose mask recontruction with built-in cellpose model (toggle in Omnipose menu)')
+
+                net_avg = False # self.NetAvg.currentIndex()==0 and self.current_model in models.MODEL_NAMES
+                resample = True # self.NetAvg.currentIndex()<2
+                omni = OMNI_INSTALLED and self.omni.isChecked()
+                
+                self.threshold, self.cellprob = (0.0, 0.0) # self.get_thresholds()
+
+                # useful printout for easily copying parameters to a notebook etc. 
+                s = ('channels={}, mask_threshold={}, '
+                     'flow_threshold={}, diameter={}, invert={}, cluster={}, net_avg={}, '
+                     'do_3D={}, omni={}'
+                    ).format(self.get_channels(),
+                             self.cellprob,
+                             self.threshold,
+                             self.diameter,
+                             False, # self.invert.isChecked(),
+                             True, # self.cluster.isChecked(),
+                             net_avg,
+                             do_3D,
+                             omni)
+                # self.runstring.setPlainText(s)
+                self.progress.setValue(30)
+                print
+                masks, flows = self.model.eval(data, channels=channels,
+                                               mask_threshold=self.cellprob,
+                                               flow_threshold=self.threshold,
+                                               diameter=self.diameter, 
+                                               invert=False, # self.invert.isChecked(),
+                                               net_avg=net_avg, 
+                                               augment=False, 
+                                               resample=resample,
+                                               do_3D=do_3D, 
+                                               progress=self.progress,
+                                               verbose=False, # self.verbose.isChecked(),
+                                               omni=omni, 
+                                               affinity_seg=False, # self.affinity.isChecked(),
+                                               cluster = True, # self.cluster.isChecked(),
+                                               transparency=True,
+                                               channel_axis=-1
+                                               )[:2]
+                
             except Exception as e:
-                print("NET ERROR: %s" % e)
+                print('GUI.py: NET ERROR: %s'%e)
                 self.progress.setValue(0)
                 return
 
             self.progress.setValue(75)
+            QApplication.processEvents() 
 
-            # convert flows to uint8 and resize to original image size
-            flows_new = []
-            flows_new.append(flows[0].copy())  # RGB flow
-            flows_new.append((np.clip(normalize99(flows[2].copy()), 0, 1) *
-                              255).astype("uint8"))  # cellprob
-            if self.load_3D:
-                if stitch_threshold == 0.:
-                    flows_new.append((flows[1][0] / 10 * 127 + 127).astype("uint8"))
+            #if not do_3D:
+            #    masks = masks[0][np.newaxis,:,:]
+            #    flows = flows[0]
+            
+            # flows here are [RGB, dP, cellprob, p, bd, tr]
+            self.flows[0] = utils.to_8_bit(flows[0]) #RGB flow for plotting
+            self.flows[1] = utils.to_8_bit(flows[2]) #dist/prob for plotting
+
+            if False: #self.boundary.isChecked():
+                self.flows[2] = utils.to_8_bit(flows[4]) #boundary for plotting
+            else:
+                self.flows[2] = np.zeros_like(self.flows[1])
+
+            if not do_3D:
+                masks = masks[np.newaxis,...]
+                for i in range(3):
+                    self.flows[i] = resize_image(self.flows[i], masks.shape[-2], masks.shape[-1])
+               
+                #critical line from what I had commended out below
+                self.flows = [self.flows[n][np.newaxis,...] for n in range(len(self.flows))]
+            
+            # I think this is a z-component placeholder. Relaceing with boundary output, will
+            # put this back later for the 3D update 
+            # if not do_3D:
+            #     self.flows[2] = np.zeros(masks.shape[1:], dtype=np.uint8)
+            #     self.flows = [self.flows[n][np.newaxis,...] for n in range(len(self.flows))]
+            # else:
+            #     self.flows[2] = (flows[1][0]/10 * 127 + 127).astype(np.uint8)
+                
+
+            # this stores the original flow components for recomputing masks
+            if len(flows)>2: 
+                self.flows.append(flows[3].squeeze()) #p put in position -2
+                flws = [flows[1], #self.flows[-1][:self.dim] is dP
+                        flows[2][np.newaxis,...]] #self.flows[-1][self.dim] is dist/prob
+                if False: # self.boundary.isChecked():
+                    flws.append(flows[4][np.newaxis,...]) #self.flows[-1][self.dim+1] is bd
                 else:
-                    flows_new.append(np.zeros(flows[1][0].shape, dtype="uint8"))
+                    flws.append(np.zeros_like(flws[-1]))
+                
+                self.flows.append(np.concatenate(flws))
 
-            if self.restore and "upsample" in self.restore:
-                self.Ly, self.Lx = self.Lyr, self.Lxr
-
-            if flows_new[0].shape[-3:-1] != (self.Ly, self.Lx):
-                self.flows = []
-                for j in range(len(flows_new)):
-                    self.flows.append(
-                        resize_image(flows_new[j], Ly=self.Ly, Lx=self.Lx,
-                                     interpolation=cv2.INTER_NEAREST))
-            else:
-                self.flows = flows_new
-
-            # add first axis
-            if self.NZ == 1:
-                masks = masks[np.newaxis, ...]
-                self.flows = [
-                    self.flows[n][np.newaxis, ...] for n in range(len(self.flows))
-                ]
-
-            self.logger.info("%d cells found with model in %0.3f sec" %
-                             (len(np.unique(masks)[1:]), time.time() - tic))
+            # logger.info('%d cells found with model in %0.3f sec'%(len(np.unique(masks)[1:]), time.time()-tic))
             self.progress.setValue(80)
-            z = 0
-
-            io._masks_to_gui(self, masks, outlines=None)
+            QApplication.processEvents() 
+            z=0
             self.masksOn = True
-            self.MCheckBox.setChecked(True)
-            self.keepMask.setEnabled(True)
-            self.saveMasks.setEnabled(True)
+            # self.MCheckBox.setChecked(True)
+            # self.outlinesOn = True #again, this option should persist and not get toggled by another GUI action 
+            # self.OCheckBox.setChecked(True)
 
+            iio._masks_to_gui(self, masks, outlines=None)
             self.progress.setValue(100)
-            if self.restore != "filter" and self.restore is not None:
-                self.compute_saturation()
-            if not do_3D and not stitch_threshold > 0:
-                self.recompute_masks = True
-            else:
-                self.recompute_masks = False
+
+            # self.toggle_server(off=True)
+            # if not do_3D:
+            #     self.threshslider.setEnabled(True)
+            #     self.probslider.setEnabled(True)
         except Exception as e:
-            print("ERROR: %s" % e)
+            print('ERROR: %s'%e)
+
+    def get_model_path(self):
+        self.current_model = self.ModelChoose.currentText()
+        if self.current_model in models.MODEL_NAMES:
+            self.current_model_path = models.model_path(self.current_model, 0, self.torch)
+        else:
+            self.current_model_path = os.fspath(models.MODEL_DIR.joinpath(self.current_model))
 
 app = QApplication(sys.argv)
 

@@ -19,10 +19,11 @@ import gui_components
 import models, core, dynamics
 import utils
 import iio
+import menus
 from transforms import resize_image
 # from utils import to_8_bit
 from gui_components import addCustomSlider, extractFrames, ColorSlider, addFilter, countDroplets
-from methods.methods import get_gray_img, pil_to_qpixmap
+from methods.methods import get_gray_img, pil_to_qpixmap, run_clustering
 
 try:
     import matplotlib.pyplot as plt
@@ -69,11 +70,12 @@ class AppDemo(QMainWindow):
 
         self.loaded = False
         self.progress = QProgressBar(self)
-        self.masksOn = True
+        self.outlinesOn = False
         self.gamma = 1.0
         self.darkmode = True
         self.load_3D = False
         self.ncolor = False
+        self.selected = 0
 
         builtin = pg.graphicsItems.GradientEditorItem.Gradients.keys()
         self.default_cmaps = ['grey','cyclic','magma','viridis']
@@ -82,6 +84,9 @@ class AppDemo(QMainWindow):
 
         self.model_strings = models.MODEL_NAMES.copy()
         self.current_model = "cyto3"
+
+        menus.mainMenu(self)
+        menus.viewMenu(self)
 
         scrollable = 1 
         if scrollable:
@@ -134,43 +139,45 @@ class AppDemo(QMainWindow):
         ###
 
         ### ToolsViewer
-        b = 0
-        c = 0
-        # Filter group
+        curr_row = 0
+        curr_col = 0
+
+        ## Filter group (g1)
         self.filter_box = QGroupBox("Filters")
         self.filter_box_g = QGridLayout()
         self.filter_box.setLayout(self.filter_box_g)
-        self.main_layout.addWidget(self.filter_box, b, 0, 1, 1)
+        self.main_layout.addWidget(self.filter_box, curr_row, curr_col, 1, 1)
 
-        b0 = 0
+        g1_row = 0
+        g1_col = 0
         self.filter_idx = 0
         self.filter_dropdown = QComboBox()
         self.filter_dropdown.addItems(["No filter", "B/W"])
         self.filter_dropdown.setCurrentIndex(0)
         self.filter_dropdown.currentIndexChanged.connect(self.updateFilterDropDown)
-        self.filter_box_g.addWidget(self.filter_dropdown, b0, c, 1, 1)
-        b0 += 1
+        self.filter_box_g.addWidget(self.filter_dropdown, g1_row, g1_col, 1, 1)
+        g1_row += 1
 
         self.color_red = QLabel('Red')
-        self.filter_box_g.addWidget(self.color_red, b0, c, 1, 1)
-        b0 += 1
+        self.filter_box_g.addWidget(self.color_red, g1_row, g1_col, 1, 1)
+        g1_row += 1
         
         self.color_green = QLabel('Green')
-        self.filter_box_g.addWidget(self.color_green, b0, c, 1, 1)
-        b0 += 1
+        self.filter_box_g.addWidget(self.color_green, g1_row, g1_col, 1, 1)
+        g1_row += 1
 
         self.color_blue = QLabel('Blue')
-        self.filter_box_g.addWidget(self.color_blue, b0, c, 1, 1)
-        b0 += 1
+        self.filter_box_g.addWidget(self.color_blue, g1_row, g1_col, 1, 1)
+        g1_row += 1
 
         self.add_filter_btt = QPushButton('Add Filter')
         self.add_filter_btt.clicked.connect(lambda: addFilter(self))
-        self.filter_box_g.addWidget(self.add_filter_btt, b0, c, 1, 1)
+        self.filter_box_g.addWidget(self.add_filter_btt, g1_row, g1_col, 1, 1)
         self.add_filter_btt.setEnabled(True)
         self.add_filter_btt.setToolTip("Press to add a filter to segment a color")
 
-        b0 -= 3
-        c += 1
+        g1_row -= 3
+        g1_col += 1
         
         self.sliders = []
         colors = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [100, 100, 100]]
@@ -186,25 +193,79 @@ class AppDemo(QMainWindow):
                 "NOTE: manually changing the saturation bars does not affect normalization in segmentation"
             )
             #self.sliders[-1].setTickPosition(QSlider.TicksRight)
-            self.filter_box_g.addWidget(self.sliders[-1], b0, c, 1, 1)
-            b0 += 1
+            self.filter_box_g.addWidget(self.sliders[-1], g1_row, g1_col, 1, 1)
+            g1_row += 1
         
         self.count_drops_btt = QPushButton('Count')
         self.count_drops_btt.clicked.connect(lambda: countDroplets(self))
-        self.filter_box_g.addWidget(self.count_drops_btt, b0, c, 1, 1)
+        self.filter_box_g.addWidget(self.count_drops_btt, g1_row, g1_col, 1, 1)
         self.count_drops_btt.setEnabled(True)
         self.count_drops_btt.setToolTip("Press count segmented droplets")
-        b0 += 1
+        g1_row += 1
 
-        b += 1
+        ## K-means group (g3)
+        curr_row += 1
+        self.cluster_box = QGroupBox("Clustering")
+        self.cluster_box_g = QGridLayout()
+        self.cluster_box.setLayout(self.cluster_box_g)
+        self.main_layout.addWidget(self.cluster_box, curr_row, curr_col, 1, 1)
 
-        # Models group
+        g3_row = 0
+        g3_col = 0
+
+        ### Clustering
+        self.useCentroids = True
+        self.CCheckBox = QCheckBox('use centroids')
+        self.CCheckBox.setToolTip('Check to use color roots for clustering')
+        # self.CCheckBox.setStyleSheet(self.checkstyle)
+        # self.CCheckBox.setFont(self.medfont)
+        self.CCheckBox.setChecked(self.useCentroids)
+        self.CCheckBox.toggled.connect(lambda: self.toggle_clustering(g3_row + 1, g3_col))
+        self.cluster_box_g.addWidget(self.CCheckBox, g3_row, g3_col, 1, 1)
+        g3_row += 1
+
+        self.seeds_list = []
+        self.num_clust_label = QLabel("# Clusters")
+        # self.roi_count.setFont(self.boldfont)
+        self.num_clust_label.setAlignment(QtCore.Qt.AlignLeft)
+        self.cluster_box_g.addWidget(self.num_clust_label, g3_row, g3_col, 1, 1)
+
+        # number of clusters
+        self.k_value = 0
+        self.K_value = QLineEdit()
+        self.K_value.setToolTip(
+            'Defines the number of clusters'
+        )
+        self.K_value.setText(str(0))
+        self.K_value.returnPressed.connect(lambda: self.create_seeds(g3_row, g3_col))
+        self.K_value.setFixedWidth(50)
+        self.cluster_box_g.addWidget(self.K_value, g3_row, g3_col + 1, 1, 1)
+        g3_row += 1
+
+        # sub-box for seed buttons
+        self.seeds_box = QGroupBox()
+        self.seeds_box_g = QGridLayout()
+        self.seeds_box.setLayout(self.seeds_box_g)
+        self.cluster_box_g.addWidget(self.seeds_box, g3_row, g3_col, 1, 1)
+        g3_row += 1
+
+        # run clustering algorithm button
+        self.run_cluster_btt = QPushButton('Run clustering')
+        self.run_cluster_btt.clicked.connect(lambda: run_clustering(self, self.k_value))
+        self.cluster_box_g.addWidget(self.run_cluster_btt, g3_row, g3_col, 1, 1)
+        self.run_cluster_btt.setEnabled(True)
+        self.run_cluster_btt.setToolTip("Press to cluster the droplets")
+        ##
+
+        ## Models group (g2)
+        curr_row += 1
         self.models_box = QGroupBox("Models")
         self.models_box_g = QGridLayout()
         self.models_box.setLayout(self.models_box_g)
-        self.main_layout.addWidget(self.models_box, b, 0, 1, 1)
+        self.main_layout.addWidget(self.models_box, curr_row, curr_col, 1, 1)
 
-        b0 = 0
+        g2_row = 0
+        g2_col = 0
         # turn off masks
         self.layer_off = False
         self.masksOn = True
@@ -214,15 +275,37 @@ class AppDemo(QMainWindow):
         # self.MCheckBox.setFont(self.medfont)
         self.MCheckBox.setChecked(self.masksOn)
         self.MCheckBox.toggled.connect(self.toggle_masks)
-        self.models_box_g.addWidget(self.MCheckBox, b0,0,1,2)
+        self.models_box_g.addWidget(self.MCheckBox, g2_row, g2_col, 1, 2)
 
-        b0 += 1
+        self.opacity = 128
+        self.Opacity = QLineEdit()
+        self.Opacity.setToolTip(
+            'Defines the opacity of the masks'
+        )
+        self.Opacity.setText(str(128))
+        self.Opacity.returnPressed.connect(self.update_opacity)
+        self.Opacity.setFixedWidth(50)
+        self.models_box_g.addWidget(self.Opacity, g2_row, g2_col + 1, 1, 2)
+
+        g2_row += 1
+        # turn off outlines
+        self.outlinesOn = False # turn off by default
+        self.OCheckBox = QCheckBox('outlines')
+        self.OCheckBox.setToolTip('Press Z or O to toggle outlines')
+        # self.OCheckBox.setStyleSheet(self.checkstyle)
+        # self.OCheckBox.setFont(self.medfont)
+        self.models_box_g.addWidget(self.OCheckBox, g2_row, g2_col, 1, 2)
+        
+        self.OCheckBox.setChecked(False)
+        self.OCheckBox.toggled.connect(self.toggle_masks) 
+
+        g2_row += 1
         self.diameter = 30
         label = QLabel("Cell diameter (pixels):")
         label.setToolTip(
             'you can manually enter the approximate diameter for your cells, \nor press “calibrate” to let the model estimate it. \nThe size is represented by a disk at the bottom of the view window \n(can turn this disk off by unchecking “scale disk on”)'
         )
-        self.models_box_g.addWidget(label, b0, 0, 1, 4)
+        self.models_box_g.addWidget(label, g2_row, g2_col, 1, 1)
         self.Diameter = QLineEdit()
         self.Diameter.setToolTip(
             'you can manually enter the approximate diameter for your cells, \nor press “calibrate” to let the "cyto3" model estimate it. \nThe size is represented by a disk at the bottom of the view window \n(can turn this disk off by unchecking “scale disk on”)'
@@ -230,9 +313,9 @@ class AppDemo(QMainWindow):
         self.Diameter.setText(str(self.diameter))
         self.Diameter.returnPressed.connect(self.compute_scale)
         self.Diameter.setFixedWidth(50)
-        self.models_box_g.addWidget(self.Diameter, b0, 4, 1, 2)
+        self.models_box_g.addWidget(self.Diameter, g2_row, g2_col + 1, 1, 1)
        
-        b0 += 1
+        g2_row += 1
         # choose channel
         self.ChannelChoose = [QComboBox(), QComboBox()]
         self.ChannelChoose[0].addItems(["0: gray", "1: red", "2: green", "3: blue"])
@@ -256,10 +339,10 @@ class AppDemo(QMainWindow):
                 self.ChannelChoose[i].setToolTip(
                     "if <em>cytoplasm</em> model is chosen, and you also have a nuclear channel, then choose the nuclear channel for this option"
                 )
-            self.models_box_g.addWidget(label, b0 + i, 0, 1, 4)
-            self.models_box_g.addWidget(self.ChannelChoose[i], b0 + i, 4, 1, 5)
+            self.models_box_g.addWidget(label, g2_row + i, g2_col, 1, 1)
+            self.models_box_g.addWidget(self.ChannelChoose[i], g2_row + i, g2_col + 1, 1, 1)
 
-        b0 += 2
+        g2_row += 2
 
         # use GPU
         self.useGPU = QCheckBox("use GPU")
@@ -268,7 +351,7 @@ class AppDemo(QMainWindow):
         )
         # self.useGPU.setFont(self.medfont)
         self.check_gpu()
-        self.models_box_g.addWidget(self.useGPU, b0, 0, 1, 3)
+        self.models_box_g.addWidget(self.useGPU, g2_row, g2_col, 1, 1)
 
         # compute segmentation with general models
         self.net_text = ["run cyto3"]
@@ -279,27 +362,15 @@ class AppDemo(QMainWindow):
         #label.setFont(self.medfont)
         #self.segBoxG.addWidget(label, b0, 0, 1, 2)
         self.StyleButtons = []
-        jj = 4
         for j in range(len(self.net_text)):
             self.StyleButtons.append(
                 gui_components.ModelButton(self, self.net_text[j], self.net_text[j]))
-            w = 5
-            self.models_box_g.addWidget(self.StyleButtons[-1], b0, jj, 1, w)
-            jj += w
+            self.models_box_g.addWidget(self.StyleButtons[-1], g2_row, g2_col + 1, 1, 1)
             #self.StyleButtons[-1].setFixedWidth(140)
             self.StyleButtons[-1].setToolTip(nett[j])
 
-        b0 += 1
-        self.progress = QProgressBar(self)
-        self.models_box_g.addWidget(self.progress, b0, 4, 1, 5)
-
-        self.roi_count = QLabel("0 ROIs")
-        # self.roi_count.setFont(self.boldfont)
-        self.roi_count.setAlignment(QtCore.Qt.AlignCenter)
-        self.models_box_g.addWidget(self.roi_count, b0, 6, 1, 7)
-
-        # MODEL DROPDOWN
-        b+=1
+        # segmentation models dropdown
+        g2_row += 1
         self.ModelChoose = QComboBox()
         if len(self.model_strings) > len(models.MODEL_NAMES):
             current_index = len(models.MODEL_NAMES)
@@ -310,14 +381,26 @@ class AppDemo(QMainWindow):
         # self.ModelChoose.setStyleSheet(self.dropdowns(width=WIDTH_5))
         # self.ModelChoose.setFont(self.smallfont)
         self.ModelChoose.setCurrentIndex(current_index)
-        self.models_box_g.addWidget(self.ModelChoose, b0, 0, 1, 4)
+        self.models_box_g.addWidget(self.ModelChoose, g2_row, g2_col, 1, 1)
+
+        # progress bar
+        self.progress = QProgressBar(self)
+        self.models_box_g.addWidget(self.progress, g2_row, g2_col + 1, 1, 1)
+
+        # roi counter
+        self.roi_count = QLabel("0 ROIs")
+        # self.roi_count.setFont(self.boldfont)
+        self.roi_count.setAlignment(QtCore.Qt.AlignCenter)
+        self.models_box_g.addWidget(self.roi_count, g2_row, g2_col + 2, 1, 1)
+
 
         ### ImageViewer
         # self.image_viewer = ImageLabel()
         # self.main_layout.addWidget(self.image_viewer, 0, c + 1, b, 3 * b)
 
+        curr_col += 1
         self.image_viewer = pg.GraphicsLayoutWidget()
-        self.main_layout.addWidget(self.image_viewer, 0, c + 1, b, 3 * b)
+        self.main_layout.addWidget(self.image_viewer, 0, curr_col, curr_row + 1, 1)
         self.image_viewer.scene().sigMouseClicked.connect(self.plot_clicked)
         self.image_viewer.scene().sigMouseMoved.connect(self.mouse_moved)
         self.make_viewbox()
@@ -409,6 +492,77 @@ class AppDemo(QMainWindow):
         if len(self.frames_list) > 1:
             addCustomSlider(self, len(self.frames_list))
 
+    def create_seeds(self, row, col):
+        # num_clust = int(self.num_clust.text())
+        self.k_value = int(float(self.K_value.text()))
+
+        # Delete previous widgets
+        for seed in self.seeds_list:
+            self.seeds_box_g.removeWidget(seed)
+        self.seeds_list = []
+
+        # Create new widgets
+        if self.useCentroids:
+            for idx in range(self.k_value):
+                button = QPushButton("Seed color #" + str(idx + 1))
+                button.clicked.connect(lambda checked, idx=idx: self.get_drop_color(idx)) #WHYYYYYYYYY
+                button.setToolTip("Click and then select the drop color you want to use as a seed for clustering")
+                button.setEnabled(True)
+                self.seeds_list.append(button)
+
+                self.seeds_box_g.addWidget(button, row + idx + 1, col, 1, 1)
+
+        else:
+            for idx in range(self.k_value):
+                button = QPushButton("Cluster #" + str(idx + 1))
+                # button.clicked.connect(lambda checked, idx=idx: self.get_drop_color(idx)) #WHYYYYYYYYY
+                button.setToolTip("Shows the average color of the cluster")
+                button.setEnabled(False)
+                self.seeds_list.append(button)
+
+                self.seeds_box_g.addWidget(button, row + idx + 1, col, 1, 1)
+
+    def scale_contour(self, cnt, scale):
+        M = cv2.moments(cnt)
+        cx = int(M['m10']/M['m00'])
+        cy = int(M['m01']/M['m00'])
+
+        cnt_norm = cnt - [cx, cy]
+        cnt_scaled = cnt_norm * scale
+        cnt_scaled = cnt_scaled + [cx, cy]
+        cnt_scaled = cnt_scaled.astype(np.int32)
+
+        return cnt_scaled
+
+    def get_drop_color(self, idx):
+        if self.selected > 0:
+            # get image
+            image = cv2.imread(self.filename, cv2.IMREAD_UNCHANGED)
+
+            # get the mask of the selected droplet
+            masked = np.copy(self.cellpix[0])
+            masked[self.selected != self.cellpix[0]] = 0
+            masked[self.selected == self.cellpix[0]] = 255
+
+            masked = masked.astype(np.uint8)
+
+            ### REDUCE MASK
+            contours, _ = cv2.findContours(masked, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+            contours = [self.scale_contour(contour, 0.7) for contour in contours]
+            
+            masked = np.zeros_like(image[:, :, 0])  # This mask is used to get the mean color of the specific bead (contour), for kmeans
+            cv2.drawContours(masked, [contours[0]], 0, 255, -1)
+
+            # B_mean, G_mean, R_mean, _ = cv2.mean(image, mask=new_masked)  # Average
+            ###
+
+            # get the average
+            B_mean, G_mean, R_mean, _ = cv2.mean(image, mask=masked)
+            print("B_mean: ", B_mean)
+            print("G_mean: ", G_mean)
+            print("R_mean: ", R_mean, "\n")
+            self.seeds_list[idx].setStyleSheet("background-color: rgb(" + str(int(R_mean)) + ", " + str(int(G_mean)) + ", " + str(int(B_mean)) + ");")
+
     def updateFilterDropDown(self):
         curr_idx = self.filter_dropdown.currentIndex()
         if curr_idx == 0:
@@ -431,7 +585,7 @@ class AppDemo(QMainWindow):
             if event.double():
                 self.recenter()
             elif self.loaded and not self.in_stroke:
-                if self.orthobtn.isChecked():
+                if False: # self.orthobtn.isChecked():
                     items = self.image_viewer.scene().items(event.scenePos())
                     for x in items:
                         if x==self.p0:
@@ -489,11 +643,12 @@ class AppDemo(QMainWindow):
             self.masksOn = False
             self.restore_masks = False
             
-        # if self.OCheckBox.isChecked():
-        #     self.outlinesOn = True
-        # else:
-        #     self.outlinesOn = False
-        if not self.masksOn and False: #not self.outlinesOn:
+        if self.OCheckBox.isChecked():
+            self.outlinesOn = True
+        else:
+            self.outlinesOn = False
+
+        if not self.masksOn and not self.outlinesOn:
             self.p0.removeItem(self.layer)
             self.layer_off = True
         else:
@@ -504,6 +659,14 @@ class AppDemo(QMainWindow):
         if self.loaded:
             # self.update_plot()
             self.update_layer()
+
+    def toggle_clustering(self, n_row, n_col):
+        if self.CCheckBox.isChecked():
+            self.useCentroids = True
+            self.create_seeds(n_row, n_col)
+        else:
+            self.useCentroids = False
+            self.create_seeds(n_row, n_col)
 
     def make_viewbox(self):
         self.p0 = gui_components.ViewBoxNoRightDrag(
@@ -630,8 +793,8 @@ class AppDemo(QMainWindow):
         self.states = [None for i in range(len(self.default_cmaps))] 
 
         # -- zero out image stack -- #
-        self.opacity = 128 # how opaque masks should be
-        self.outcolor = [200,200,255,200]
+        # self.opacity = 128 # how opaque masks should be
+        self.outcolor = [0, 0, 255, 255]
         self.NZ, self.Ly, self.Lx = 1,512,512
         self.saturation = [[0,255] for n in range(self.NZ)]
         self.gamma = 1
@@ -697,7 +860,7 @@ class AppDemo(QMainWindow):
             self.layerz[...,:3] = self.cellcolors[self.cellpix[self.currentZ],:]
             self.layerz[...,3] = self.opacity * (self.cellpix[self.currentZ]>0).astype(np.uint8)
             if self.selected>0:
-                self.layerz[self.cellpix[self.currentZ]==self.selected] = np.array([255,255,255,self.opacity])
+                self.layerz[self.cellpix[self.currentZ]==self.selected] = np.array([255,255,255, 128])
             cZ = self.currentZ
             stroke_z = np.array([s[0][0] for s in self.strokes])
             inZ = np.nonzero(stroke_z == cZ)[0]
@@ -708,8 +871,8 @@ class AppDemo(QMainWindow):
         else:
             self.layerz[...,3] = 0
 
-        # if self.outlinesOn:
-        #     self.layerz[self.outpix[self.currentZ]>0] = np.array(self.outcolor).astype(np.uint8)
+        if self.outlinesOn:
+            self.layerz[self.outpix[self.currentZ]>0] = np.array(self.outcolor).astype(np.uint8)
 
     def update_layer(self):
         self.draw_layer()
@@ -746,6 +909,25 @@ class AppDemo(QMainWindow):
         self.image_viewer.show()
         self.show()
 
+    def update_opacity(self):
+        self.opacity = int(float(self.Opacity.text()))
+        self.update_layer()
+
+    def update_cellcolors(self, df_colors):
+        # new_cellcolors = np.array([255,255,255])[np.newaxis,:]
+        new_colors = []
+        # for val in df_colors:
+        #     if val == 0:
+        #         new_cellcolors = np.append(new_cellcolors, [255, 0, 0], axis=0)
+        #     else:
+        #         new_cellcolors = np.append(new_cellcolors, [0, 0, 255], axis=0)
+
+        new_colors = [[255, 0, 0] if val == 0 else [0, 0, 255] for val in df_colors]
+
+        new_cellcolors = np.concatenate((np.array([[255,255,255]]), new_colors), axis=0).astype(np.uint8)
+        self.cellcolors = new_cellcolors
+        self.update_layer()
+
     def clear_all(self):
         self.prev_selected = 0
         self.selected = 0
@@ -756,6 +938,118 @@ class AppDemo(QMainWindow):
         self.ncells = 0
         # self.toggle_removals()
         self.update_layer()
+
+    def select_cell(self, idx):
+        self.prev_selected = self.selected
+        self.selected = idx
+        if self.selected > 0:
+            z = self.currentZ
+            self.layerz[self.cellpix[z]==idx] = np.array([255,255,255, self.opacity])
+            self.update_layer()
+
+    def unselect_cell(self):
+        if self.selected > 0:
+            idx = self.selected
+            if idx < self.ncells+1:
+                z = self.currentZ
+                self.layerz[self.cellpix[z]==idx] = np.append(self.cellcolors[idx], self.opacity)
+                if self.outlinesOn:
+                    self.layerz[self.outpix[z]==idx] = np.array(self.outcolor).astype(np.uint8)
+                    #[0,0,0,self.opacity])
+                self.update_layer()
+        self.selected = 0
+
+    def remove_cell(self, idx):
+        # remove from manual array
+        self.selected = 0
+        if self.NZ > 1:
+            zextent = ((self.cellpix==idx).sum(axis=(1,2)) > 0).nonzero()[0]
+        else:
+            zextent = [0]
+        for z in zextent:
+            cp = self.cellpix[z]==idx
+            op = self.outpix[z]==idx
+            # remove from self.cellpix and self.outpix
+            self.cellpix[z, cp] = 0
+            self.outpix[z, op] = 0    
+            if z==self.currentZ:
+                # remove from mask layer
+                self.layerz[cp] = np.array([0,0,0,0])
+
+        # reduce other pixels by -1
+        self.cellpix[self.cellpix>idx] -= 1
+        self.outpix[self.outpix>idx] -= 1
+        
+        if self.NZ==1:
+            self.removed_cell = [self.ismanual[idx-1], self.cellcolors[idx], np.nonzero(cp), np.nonzero(op)]
+            self.redo.setEnabled(True)
+            ar, ac = self.removed_cell[2]
+            d = datetime.datetime.now()        
+            self.track_changes.append([d.strftime("%m/%d/%Y, %H:%M:%S"), 'removed mask', [ar,ac]])
+        # remove cell from lists
+        self.ismanual = np.delete(self.ismanual, idx-1)
+        self.cellcolors = np.delete(self.cellcolors, [idx], axis=0)
+        del self.zdraw[idx-1]
+        self.ncells -= 1
+        print('GUI_INFO: removed cell %d'%(idx-1))
+        
+        self.update_layer()
+        if self.ncells==0:
+            self.ClearButton.setEnabled(False)
+        if self.NZ==1:
+            io._save_sets(self)
+
+    def merge_cells(self, idx):
+        self.prev_selected = self.selected
+        self.selected = idx
+        if self.selected != self.prev_selected:
+            for z in range(self.NZ):
+                ar0, ac0 = np.nonzero(self.cellpix[z]==self.prev_selected)
+                ar1, ac1 = np.nonzero(self.cellpix[z]==self.selected)
+                touching = np.logical_and((ar0[:,np.newaxis] - ar1)<3,
+                                            (ac0[:,np.newaxis] - ac1)<3).sum()
+                ar = np.hstack((ar0, ar1))
+                ac = np.hstack((ac0, ac1))
+                vr0, vc0 = np.nonzero(self.outpix[z]==self.prev_selected)
+                vr1, vc1 = np.nonzero(self.outpix[z]==self.selected)
+                self.outpix[z, vr0, vc0] = 0    
+                self.outpix[z, vr1, vc1] = 0    
+                if touching > 0:
+                    mask = np.zeros((np.ptp(ar)+4, np.ptp(ac)+4), np.uint8)
+                    mask[ar-ar.min()+2, ac-ac.min()+2] = 1
+                    contours = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+                    pvc, pvr = contours[-2][0].squeeze().T            
+                    vr, vc = pvr + ar.min() - 2, pvc + ac.min() - 2
+                    
+                else:
+                    vr = np.hstack((vr0, vr1))
+                    vc = np.hstack((vc0, vc1))
+                color = self.cellcolors[self.prev_selected]
+                self.draw_mask(z, ar, ac, vr, vc, color, idx=self.prev_selected)
+            self.remove_cell(self.selected)
+            print('GUI_INFO: merged two cells')
+            self.update_layer()
+            io._save_sets(self)
+            self.undo.setEnabled(False)      
+            self.redo.setEnabled(False)    
+
+    def undo_remove_cell(self):
+        if len(self.removed_cell) > 0:
+            z = 0
+            ar, ac = self.removed_cell[2]
+            vr, vc = self.removed_cell[3]
+            color = self.removed_cell[1]
+            self.draw_mask(z, ar, ac, vr, vc, color)
+            self.toggle_mask_ops()
+            self.cellcolors = np.append(self.cellcolors, color[np.newaxis,:], axis=0)
+            self.ncells+=1
+            self.ismanual = np.append(self.ismanual, self.removed_cell[0])
+            self.zdraw.append([])
+            print('>>> added back removed cell')
+            self.update_layer()
+            io._save_sets(self)
+            self.removed_cell = []
+            self.redo.setEnabled(False)
 
     def new_normalize99(self, Y,lower=0.01,upper=99.99,omni=False):
         """ normalize image so 0.0 is 0.01st percentile and 1.0 is 99.99th percentile """

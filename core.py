@@ -6,7 +6,8 @@ from urllib.parse import urlparse
 import tempfile
 import cv2
 from scipy.stats import mode
-import transforms, dynamics, utils, metrics, io
+# from . import transforms, dynamics, utils, metrics, iiio
+import transforms, dynamics, utils, metrics, iiio   # TO WORK
 
 # import omnipose
 
@@ -30,7 +31,8 @@ try:
     from torch import nn
     from torch.utils import mkldnn as mkldnn_utils
     TORCH_ENABLED = True
-    from resnet_torch import torch_GPU, torch_CPU, CPnet, ARM, empty_cache
+    # from .resnet_torch import torch_GPU, torch_CPU, CPnet, ARM, empty_cache
+    from resnet_torch import torch_GPU, torch_CPU, CPnet, ARM, empty_cache  # TO WORK
 except Exception as e:
     TORCH_ENABLED = False
     print('core.py torch import error',e)

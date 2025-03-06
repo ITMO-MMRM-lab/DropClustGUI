@@ -114,7 +114,8 @@ def scale_contour(cnt, scale):
 
 def run_clustering(parent, num_clusters=2):
     tmp_cellpix = np.copy(parent.cellpix[0])
-    image = cv2.imread(parent.filename, cv2.IMREAD_UNCHANGED)
+    # image = cv2.imread(parent.filename, cv2.IMREAD_UNCHANGED)
+    image = parent.stack[0].copy()[:2]  # bug here
     df_mean_color = pd.DataFrame()
 
     for idx in range(parent.cellpix[0].max()):

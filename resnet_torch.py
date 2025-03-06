@@ -10,7 +10,8 @@ import datetime
 from torch.cuda.amp import autocast 
 import torch.utils.checkpoint as cp
 
-import transforms, io, dynamics, utils
+# from . import transforms, dynamics, utils
+import transforms, dynamics, utils
 
 # I wanted to try out an ND implementation, so this is just for testing 
 CONVND = False
@@ -19,6 +20,7 @@ CONVND = False
 if CONVND:
     from .convNd import convNd
 
+# from .gpu import ARM, torch_GPU, torch_CPU, empty_cache
 from gpu import ARM, torch_GPU, torch_CPU, empty_cache
     
 sz = 3 #kernel size, works as xy or xyz/xyt equally well 

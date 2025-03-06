@@ -16,10 +16,13 @@ from scipy.ndimage import gaussian_filter, zoom
 import logging
 models_logger = logging.getLogger(__name__)
 
-import transforms, dynamics, utils, plot
+# from . import transforms, dynamics, utils, plot
+import transforms, dynamics, utils, plot    # TO WORK
+# from .core import UnetModel, assign_device, check_mkl, MXNET_ENABLED, parse_model_string
 from core import UnetModel, assign_device, check_mkl, MXNET_ENABLED, parse_model_string
 # from io import OMNI_INSTALLED
-from gpu import empty_cache, ARM #, custom_nonzero_cuda
+#from .gpu import empty_cache, ARM #, custom_nonzero_cuda
+from gpu import empty_cache, ARM    # TO WORK
 # from omnipose.utils import hysteresis_threshold
 OMNI_INSTALLED = False
 

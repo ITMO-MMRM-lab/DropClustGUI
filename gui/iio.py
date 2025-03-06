@@ -1,4 +1,4 @@
-import os, datetime, gc, warnings, glob, shutil, copy
+import os, sys, datetime, gc, warnings, glob, shutil, copy
 from natsort import natsorted
 import numpy as np
 import cv2
@@ -6,7 +6,9 @@ import tifffile
 import logging
 import fastremap 
 
-import utils, plot, transforms, models
+
+# from .. import utils, plot, transforms, models
+import utils, plot, transforms, models  # TO WORK
 from iiio import imread, imsave, outlines_to_text
 from transforms import normalize99
 
@@ -138,7 +140,7 @@ def _load_image(parent, filename=None, load_seg=True):
             load_mask = True if os.path.isfile(mask_file) else False
     try:
         print(f'GUI_INFO: loading image: {filename}')
-        image = imread(filename)
+        image = imread(filename, parent)
         parent.loaded = True
     except Exception as e:
         print('ERROR: images not compatible')

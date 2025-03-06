@@ -1,7 +1,8 @@
 import platform  
 import os
 
-from logger import setup_logger
+# from .logger import setup_logger
+from logger import setup_logger    # TO WORK
 gpu_logger = setup_logger('gpu')
 
 ARM = 'arm' in platform.processor() # the backend chack for apple silicon does not work on intel macs

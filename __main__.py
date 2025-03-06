@@ -3,14 +3,13 @@ import subprocess
 import numpy as np
 from natsort import natsorted
 from tqdm import tqdm
-# from cellpose_omni import utils, models, io
 
-from models import MODEL_NAMES, C2_MODEL_NAMES, BD_MODEL_NAMES, CP_MODELS
+from .models import MODEL_NAMES, C2_MODEL_NAMES, BD_MODEL_NAMES, CP_MODELS
 
 import torch
 
 try:
-    from cellpose_omni.gui import gui 
+    from drop_clus.gui import gui 
     GUI_ENABLED = True 
 except ImportError as err:
     GUI_ERROR = err
@@ -26,7 +25,7 @@ except Exception as err:
 
 # from dependencies import gui_deps
     
-import logging
+from . import logging
 logger = logging.getLogger(__name__)
 
 def confirm_prompt(question):
@@ -37,23 +36,11 @@ def confirm_prompt(question):
 
 def install(package):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
-    
-def check_omni(logger,omni=False):
-    if omni and not 'omnipose' not in sys.modules:
-        logger.info('Omnipose features requested but not installed.')
-        confirm = confirm_prompt('Install Omnipose?')
-        if confirm:
-            install('omnipose')
-        else:
-            logger.info('Omnipose not installed. Running with omni=False')
-        return confirm
-    
 
 
 # settings re-grouped a bit
 # added omni as a parameter
 def main(args):
-
     # convert the tyx string to a vector
     if args.tyx is not None:
         args.tyx = tuple([int(s) for s in (args.tyx.split(','))])
@@ -82,16 +69,13 @@ def main(args):
                 if confirm:
                     current_dir = os.path.abspath(os.path.dirname(__file__))
                     cellpose_omni_path = os.path.dirname(current_dir)
-                    # print('cellpose_omni_path',cellpose_omni_path)
-                    # next_command = ['&&', 'omnipose'] # run omnipose again
-                    # install('cellpose-omni[gui] @ file://{}#egg=cellpose-omni'.format(cellpose_omni_path)) # local version) 
                     
                     # no need to resintall, jsut do the extras
                     for dep in gui_deps:
                         install(dep)
                 
                     subprocess.check_call([sys.executable, "-m", "omnipose"])
-                                                             
+
         else:
             print('heyyyo\n')
             gui.run()

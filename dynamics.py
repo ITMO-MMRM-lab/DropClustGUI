@@ -11,7 +11,8 @@ import fastremap
 import logging
 dynamics_logger = logging.getLogger(__name__)
 
-import utils, metrics, transforms
+# from . import utils, metrics, transforms
+import utils, metrics, transforms   # TO WORK
 # from .io import OMNI_INSTALLED
 OMNI_INSTALLED = False
 if OMNI_INSTALLED:
@@ -30,7 +31,8 @@ try:
     import torch
     from torch import nn
     TORCH_ENABLED = True
-    from resnet_torch import torch_GPU, torch_CPU 
+    # from .resnet_torch import torch_GPU, torch_CPU
+    from resnet_torch import torch_GPU, torch_CPU   # TO WORK
 except Exception as e:
     TORCH_ENABLED = False
     print('dynamics.py torch import error',e)

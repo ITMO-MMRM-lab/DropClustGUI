@@ -3,6 +3,7 @@ from natsort import natsorted
 import numpy as np
 import cv2
 import tifffile
+import mimetypes
 import logging, pathlib, sys
 from pathlib import Path
 
@@ -15,7 +16,8 @@ try:
 except:
     OMNI_INSTALLED = False
 
-import utils, plot, transforms
+# from . import utils, plot, transforms
+import utils, plot, transforms  # TO WORK
 
 try:
     from PyQt6 import QtGui, QtCore, Qt, QtWidgets
@@ -117,13 +119,54 @@ def outlines_to_text(base, outlines):
             f.write(xy_str)
             f.write('\n')
 
-def imread(filename):
-    ext = os.path.splitext(filename)[-1]
-    if ext== '.tif' or ext=='.tiff':
-        img = tifffile.imread(filename)
-        return img
-    else:
+def extract_frames(video_path):
+    new_dir = video_path.split('.')[0] + '_frames'  #os.getcwd()
+    os.mkdir(new_dir)
+    
+    vidcap = cv2.VideoCapture(video_path)
+    success,image = vidcap.read()
+    count = 0
+    while success:
+        cv2.imwrite(os.path.join(new_dir, "frame%d.png" % count), image)
+        success,image = vidcap.read()
+        count += 1
+    print("FRAMES SAVED!")
+    return new_dir, natsorted(os.listdir(new_dir))
+
+def imread(filename, parent=None):
+    mime_info = mimetypes.guess_type(filename)[0]
+    mime_ext, mime_type = mime_info.split('/')
+
+    if mime_ext == 'image':
+        if mime_type == 'tiff':
+            img = tifffile.imread(filename)
+            return img
+        else:
+            try:
+                if mime_type == 'gif':
+                    new_dir, frame_list = extract_frames(filename)
+                    filename = new_dir + "/" + frame_list[0]
+
+                    if parent is not None:
+                        parent.frames_dir = new_dir
+                        parent.num_frames = len(frame_list)
+
+                img = cv2.imread(filename, -1)#cv2.LOAD_IMAGE_ANYDEPTH)
+                if img.ndim > 2:
+                    img = img[..., [2,1,0]]
+                return img
+            except Exception as e:
+                io_logger.critical('ERROR: could not read file, %s'%e)
+                return None
+    elif mime_ext == 'video':
         try:
+            new_dir, frame_list = extract_frames(filename)
+            filename = new_dir + "/" + frame_list[0]
+
+            if parent is not None:
+                parent.frames_dir = new_dir
+                parent.num_frames = len(frame_list)
+
             img = cv2.imread(filename, -1)#cv2.LOAD_IMAGE_ANYDEPTH)
             if img.ndim > 2:
                 img = img[..., [2,1,0]]

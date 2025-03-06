@@ -1,6 +1,5 @@
 import sys, os, gc
 import cv2
-import natsort
 import tifffile
 import numpy as np
 import PIL
@@ -12,10 +11,11 @@ from pyqtgraph import Point
 from qtpy import QtCore
 from PyQt6.QtCore import Qt, QSize, pyqtSignal
 from PyQt6.QtGui import QPixmap, QPainter
-from PyQt6.QtWidgets import QApplication, QMainWindow, QTableWidget, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QSlider, QToolButton, QFileDialog, QPushButton
+from PyQt6.QtWidgets import QApplication, QMainWindow, QTableWidget, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QSlider, QToolButton, QFileDialog, QPushButton, QSpacerItem, QSizePolicy, QGraphicsWidget
 from superqt import QRangeSlider, QLabeledDoubleRangeSlider, QLabeledRangeSlider
 from scipy.ndimage import find_objects
-from methods.methods import get_gray_img, pil_to_qpixmap
+from methods import get_gray_img, pil_to_qpixmap
+from iio import _initialize_images, _masks_to_gui
 
 import torch
 from torch import nn
@@ -37,89 +37,6 @@ def imread(filename):
         except Exception as e:
             # io_logger.critical('ERROR: could not read file, %s'%e)
             return None
-
-def extractFrames(video_path):
-    curr_path = os.getcwd()
-    new_dir = os.path.join(curr_path, 'frames')
-    os.mkdir(new_dir)
-    
-    vidcap = cv2.VideoCapture(video_path)
-    success,image = vidcap.read()
-    count = 0
-    while success:
-        cv2.imwrite(os.path.join(new_dir, "frame%d.png" % count), image)
-        success,image = vidcap.read()
-        count += 1
-    print("Frames saved!")
-    return new_dir, natsort.natsorted(os.listdir(new_dir))
-
-def addCustomSlider(parent, slider_max):
-    sliderLayout = QHBoxLayout()
-
-    ### Left arrow
-    leftArrowButton = QToolButton()
-    leftArrowButton.setArrowType(Qt.ArrowType.LeftArrow)
-
-    leftArrowButton.clicked.connect(lambda: switchFrame(parent, 'L'))
-
-    sliderLayout.addWidget(leftArrowButton)
-    ###
-
-    ### Slider
-    slider = QSlider(Qt.Orientation.Horizontal, parent)
-    # slider.setGeometry(10, 480, 400, 20)
-    slider.setMinimum(0)
-    slider.setMaximum(slider_max)
-    slider.setTickInterval(1)
-    slider.valueChanged.connect(lambda: updateFramesSlider(parent))
-    slider.setValue(0)
-
-    parent.frames_slider = slider
-    sliderLayout.addWidget(slider)
-    ###
-
-    ### Right arrow
-    rightArrowButton = QToolButton()
-    rightArrowButton.setArrowType(Qt.ArrowType.RightArrow)
-
-    rightArrowButton.clicked.connect(lambda: switchFrame(parent, 'R'))
-
-    sliderLayout.addWidget(rightArrowButton)
-    ###
-
-    parent.main_layout.addLayout(sliderLayout, 1, 8, 1, 3*4)
-
-def switchFrame(parent, button_side):
-    if button_side == 'L':
-        parent.frames_slider.setValue(parent.frames_slider.value() - 1)
-    else:
-        parent.frames_slider.setValue(parent.frames_slider.value() + 1)
-
-def updateFramesSlider(parent):
-    idx = parent.sender().value() - 1
-
-    new_img, new_gs_img = get_gray_img(os.path.join(parent.frames_dir, parent.frames_list[idx]))
-    parent.current_img = new_img
-    parent.current_gs_img = new_gs_img
-
-    curr_dropdown_idx = parent.filter_dropdown.currentIndex()
-    if curr_dropdown_idx > 0:
-        cp_curr_gs_img = new_gs_img.copy()
-        boundaries = parent.filters_boundaries_values[curr_dropdown_idx]
-        single_mask = (((new_img[:, :, 0] >= boundaries[0][0]) & (new_img[:, :, 0] <= boundaries[0][1])) &
-                        ((new_img[:, :, 1] >= boundaries[1][0]) & (new_img[:, :, 1] <= boundaries[1][1])) &
-                        ((new_img[:, :, 2] >= boundaries[2][0]) & (new_img[:, :, 2] <= boundaries[2][1])))
-
-        cp_curr_gs_img[single_mask] = new_img[single_mask]
-        parent.image_viewer.setPixmap(
-                        pil_to_qpixmap(
-                            Image.fromarray(
-                                cp_curr_gs_img.astype('uint8')
-                                )))
-    else:
-        parent.image_viewer.setPixmap(
-                        pil_to_qpixmap(Image.fromarray(
-                            new_img.astype('uint8'))))
 
 def addFilter(parent):
     parent.filters_boundaries_values.append(
@@ -157,118 +74,6 @@ def countDroplets(parent):
     # print("Amount: ", len(slices))
     # print("Current filter: ", parent.filter_dropdown.currentIndex())
 
-def loadImage(parent, filename=None, load_seg=True):
-    """ load image with filename; if None, open QFileDialog """
-    if filename is None:
-        name = QFileDialog.getOpenFileName(
-            parent, "Load image"
-            )
-        filename = name[0]
-    manual_file = os.path.splitext(filename)[0]+'_seg.npy'
-    load_mask = False
-    if load_seg:
-        if os.path.isfile(manual_file) and not parent.autoloadMasks.isChecked():
-            _load_seg(parent, manual_file, image=imread(filename), image_file=filename)
-            return
-        elif os.path.isfile(os.path.splitext(filename)[0]+'_manual.npy'):
-            manual_file = os.path.splitext(filename)[0]+'_manual.npy'
-            _load_seg(parent, manual_file, image=imread(filename), image_file=filename)
-            return
-        elif parent.autoloadMasks.isChecked():
-            mask_file = os.path.splitext(filename)[0]+'_masks'+os.path.splitext(filename)[-1]
-            mask_file = os.path.splitext(filename)[0]+'_masks.tif' if not os.path.isfile(mask_file) else mask_file
-            load_mask = True if os.path.isfile(mask_file) else False
-    try:
-        print(f'GUI_INFO: loading image: {filename}')
-        image = imread(filename)
-        parent.loaded = True
-    except Exception as e:
-        print('ERROR: images not compatible')
-        print(f'ERROR: {e}')
-
-    if parent.loaded:
-        parent.reset()
-        parent.filename = filename
-        filename = os.path.split(parent.filename)[-1]
-        _initialize_images(parent, image, resize=parent.resize, X2=0)
-        parent.clear_all()
-        parent.loaded = True
-        parent.enable_buttons()
-        if load_mask:
-            print('loading masks')
-            _load_masks(parent, filename=mask_file)
-            
-def _initialize_images(parent, image, resize, X2):
-    """ format image for GUI """
-    parent.onechan=False
-    if image.ndim > 3:
-        # make tiff Z x channels x W x H
-        if image.shape[0]<4:
-            # tiff is channels x Z x W x H
-            image = np.transpose(image, (1,0,2,3))
-        elif image.shape[-1]<4:
-            # tiff is Z x W x H x channels
-            image = np.transpose(image, (0,3,1,2))
-        # fill in with blank channels to make 3 channels
-        if image.shape[1] < 3:
-            shape = image.shape
-            image = np.concatenate((image,
-                            np.zeros((shape[0], 3-shape[1], shape[2], shape[3]), dtype=np.uint8)), axis=1)
-            if 3-shape[1]>1:
-                parent.onechan=True
-        image = np.transpose(image, (0,2,3,1))
-    elif image.ndim==3:
-        if image.shape[0] < 5:
-            image = np.transpose(image, (1,2,0))
-        if image.shape[-1] < 3:
-            shape = image.shape
-            #if parent.autochannelbtn.isChecked():
-            #    image = normalize99(image) * 255
-            image = np.concatenate((image,np.zeros((shape[0], shape[1], 3-shape[2]),dtype=type(image[0,0,0]))), axis=-1)
-            if 3-shape[2]>1:
-                parent.onechan=True
-            image = image[np.newaxis,...]
-        elif image.shape[-1]<5 and image.shape[-1]>2:
-            image = image[:,:,:3]
-            #if parent.autochannelbtn.isChecked():
-            #    image = normalize99(image) * 255
-            image = image[np.newaxis,...]
-    else:
-        image = image[np.newaxis,...]
-    
-    img_min = image.min() 
-    img_max = image.max()
-    parent.stack = image
-    parent.NZ = len(parent.stack)
-    # parent.scroll.setMaximum(parent.NZ-1)
-    parent.stack = parent.stack.astype(np.float32)
-    parent.stack -= img_min
-    if img_max > img_min + 1e-3:
-        parent.stack /= (img_max - img_min)
-    parent.stack *= 255
-    if parent.NZ>1:
-        print('GUI_INFO: converted to float and normalized values to 0.0->255.0')
-    del image
-    gc.collect()
-
-    #parent.stack = list(parent.stack)
-
-    if parent.stack.ndim < 4:
-        parent.onechan=True
-        parent.stack = parent.stack[:,:,:,np.newaxis]
-    parent.imask=0
-    parent.Ly, parent.Lx = parent.stack.shape[1:3]
-    parent.layerz = 0 * np.ones((parent.Ly,parent.Lx,4), 'uint8')
-    
-    # if parent.autobtn.isChecked() or len(parent.saturation)!=parent.NZ:
-    #     parent.compute_saturation()
-    parent.compute_scale()
-    parent.currentZ = int(np.floor(parent.NZ/2))
-    # parent.scroll.setValue(parent.currentZ)
-    # parent.zpos.setText(str(parent.currentZ))
-    parent.track_changes = []
-    parent.recenter()
-
 def disk(med, r, Ly, Lx):
     """ returns pixels of disk with radius r and center med """
     yy, xx = np.meshgrid(np.arange(0,Ly,1,int), np.arange(0,Lx,1,int),
@@ -277,45 +82,6 @@ def disk(med, r, Ly, Lx):
     y = yy[inds].flatten()
     x = xx[inds].flatten()
     return y,x
-
-def use_gpu(gpu_number=0, use_torch=True):
-    """ 
-    Check if GPU is available for use.
-
-    Args:
-        gpu_number (int): The index of the GPU to be used. Default is 0.
-        use_torch (bool): Whether to use PyTorch for GPU check. Default is True.
-
-    Returns:
-        bool: True if GPU is available, False otherwise.
-
-    Raises:
-        ValueError: If use_torch is False, as cellpose only runs with PyTorch now.
-    """
-    if use_torch:
-        return _use_gpu_torch(gpu_number)
-    else:
-        raise ValueError("cellpose only runs with PyTorch now")
-
-
-def _use_gpu_torch(gpu_number=0):
-    """
-    Checks if CUDA is available and working with PyTorch.
-
-    Args:
-        gpu_number (int): The GPU device number to use (default is 0).
-
-    Returns:
-        bool: True if CUDA is available and working, False otherwise.
-    """
-    try:
-        device = torch.device("cuda:" + str(gpu_number))
-        _ = torch.zeros([1, 2, 3]).to(device)
-        # core_logger.info("** TORCH CUDA version installed and working. **")
-        return True
-    except:
-        # core_logger.info("TORCH CUDA version not installed/working.")
-        return False
 
 class ModelButton(QPushButton):
     def __init__(self, parent, model_name, text):
@@ -500,6 +266,71 @@ class HistLUT(pg.HistogramLUTItem):
             else:
                 p.drawLine(gradRect.topLeft(), gradRect.bottomLeft())
                 p.drawLine(gradRect.topRight(), gradRect.bottomRight())
+
+class CustomSlider(QWidget):
+    def __init__(self, minimum, maximum, parent):
+        super(CustomSlider, self).__init__()   #.__init__(parent=parent)
+
+        sliderLayout = QHBoxLayout()
+
+        ### Left arrow
+        leftArrowButton = QToolButton()
+        leftArrowButton.setArrowType(Qt.ArrowType.LeftArrow)
+
+        leftArrowButton.clicked.connect(lambda: self.switchFrame(self, parent, 'L'))
+
+        sliderLayout.addWidget(leftArrowButton)
+        ###
+
+        ### Slider
+        self.slider = QSlider(Qt.Orientation.Horizontal)
+        # slider.setGeometry(10, 480, 400, 20)
+        self.slider.setMinimum(minimum)
+        self.slider.setMaximum(maximum)
+        self.slider.setTickInterval(1)
+        self.slider.valueChanged.connect(lambda: self.updateFramesSlider(self, parent))
+        self.slider.setToolTip(str(parent.curr_idx_frame))
+        self.slider.setValue(parent.curr_idx_frame)
+
+        # if parent is not None:
+        #     print("WACHA AQUI OE")
+        #     parent.frames_slider = slider
+        sliderLayout.addWidget(self.slider)
+        ###
+
+        ### Right arrow
+        rightArrowButton = QToolButton()
+        rightArrowButton.setArrowType(Qt.ArrowType.RightArrow)
+
+        rightArrowButton.clicked.connect(lambda: self.switchFrame(self, parent, 'R'))
+
+        sliderLayout.addWidget(rightArrowButton)
+        ###
+        self.setLayout(sliderLayout)
+
+    def switchFrame(e, self, parent, button_side):
+        parent.curr_idx_frame = self.slider.value()
+        self.slider.setToolTip(str(self.slider.value()))
+
+        if button_side == 'L':
+            self.slider.setValue(self.slider.value() - 1)
+        else:
+            self.slider.setValue(self.slider.value() + 1)
+
+    def updateFramesSlider(e, self, parent):
+        parent.curr_idx_frame = e.sender().value()
+        self.slider.setToolTip(str(e.sender().value()))
+
+        idx = e.sender().value() - 1
+
+        img = cv2.imread(parent.frames_dir + "/frame"+ str(idx) + ".png", -1)   #cv2.LOAD_IMAGE_ANYDEPTH)
+        if img.ndim > 2:
+            img = img[..., [2,1,0]]
+
+        _initialize_images(parent, img, resize=parent.resize, X2=0)
+        if len(parent.masks) > 1 and parent.masksOn:
+            _masks_to_gui(parent, parent.masks[parent.curr_idx_frame - 1], outlines=None)
+        parent.update_plot()
 
 class ImageDraw(pg.ImageItem):
     """

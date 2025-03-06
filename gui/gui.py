@@ -1,5 +1,5 @@
 import sys, os, time
-sys.path.insert(1, '/home/mellamoarroz/Documents/drop_clus/')
+sys.path.insert(1, '../drop_clus/')
 
 os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 
@@ -13,17 +13,18 @@ from PIL import Image, ImageEnhance, ImageQt
 from qtpy import QtCore
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QPixmap, QFont, QPalette
-from PyQt6.QtWidgets import QApplication, QMainWindow, QTableWidget, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QGridLayout, QSlider, QToolButton, QScrollArea, QCheckBox, QGraphicsOpacityEffect, QGroupBox, QComboBox, QPushButton, QProgressBar, QLineEdit
+from PyQt6.QtWidgets import QApplication, QMainWindow, QTableWidget, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QGridLayout, QSlider, QToolButton, QScrollArea, QCheckBox, QGraphicsOpacityEffect, QGroupBox, QComboBox, QPushButton, QProgressBar, QLineEdit, QGraphicsProxyWidget
 
 import gui_components
 import models, core, dynamics
 import utils
 import iio
+import iiio
 import menus
 from transforms import resize_image
 # from utils import to_8_bit
-from gui_components import addCustomSlider, extractFrames, ColorSlider, addFilter, countDroplets
-from methods.methods import get_gray_img, pil_to_qpixmap, run_clustering
+from gui_components import ColorSlider, addFilter, countDroplets #, addCustomSlider
+from methods import get_gray_img, pil_to_qpixmap, run_clustering
 
 try:
     import matplotlib.pyplot as plt
@@ -127,9 +128,9 @@ class AppDemo(QMainWindow):
         self.hLineOrtho = [pg.InfiniteLine(angle=0, movable=False), pg.InfiniteLine(angle=0, movable=False)]
 
         self.frames_dir = ''
-        self.frames_list = []
-        self.frames_slider = None
-        
+        self.curr_idx_frame = 1
+        self.num_frames = 1
+ 
         self.current_gs_img = None
         self.current_img = None
 
@@ -297,7 +298,15 @@ class AppDemo(QMainWindow):
         self.models_box_g.addWidget(self.OCheckBox, g2_row, g2_col, 1, 2)
         
         self.OCheckBox.setChecked(False)
-        self.OCheckBox.toggled.connect(self.toggle_masks) 
+        self.OCheckBox.toggled.connect(self.toggle_masks)
+
+        g2_row += 1
+        # turn off outlines
+        self.AllCheckBox = QCheckBox('apply to all frames')
+        # self.AllCheckBox.setStyleSheet(self.checkstyle)
+        # self.AllCheckBox.setFont(self.medfont)
+        self.AllCheckBox.setChecked(False)
+        self.models_box_g.addWidget(self.AllCheckBox, g2_row, g2_col, 1, 1)
 
         g2_row += 1
         self.diameter = 30
@@ -481,7 +490,7 @@ class AppDemo(QMainWindow):
 
     def setImage(self, file_path):
         file_ext = file_path.split('.')[1]
-        self.frames_dir, self.frames_list = extractFrames(file_path)
+        self.frames_dir, self.frames_list = iiio.extract_frames(file_path)
         self.current_img, self.current_gs_img = get_gray_img(os.path.join(self.frames_dir, self.frames_list[0]))
         self.image_viewer.setPixmap(
                             pil_to_qpixmap(
@@ -798,11 +807,9 @@ class AppDemo(QMainWindow):
         self.NZ, self.Ly, self.Lx = 1,512,512
         self.saturation = [[0,255] for n in range(self.NZ)]
         self.gamma = 1
-        # self.slider.setMinimum(0)
-        # self.slider.setMaximum(100)
-        # self.slider.show()
         self.currentZ = 0
         self.flows = [[],[],[],[],[[]]]
+        self.masks = []
         self.stack = np.zeros((1,self.Ly,self.Lx,3))
         # masks matrix
         self.layerz = np.zeros((self.Ly,self.Lx,4), np.uint8)
@@ -1264,7 +1271,8 @@ class AppDemo(QMainWindow):
         try:
             tic=time.time()
             self.clear_all()
-            self.flows = [[],[],[]]
+            self.flows = [[[],[],[]] for i in range(self.num_frames)] if self.AllCheckBox.isChecked() else [[[],[],[]]] # [[],[],[]]
+            self.masks = [[] for i in range(self.num_frames)] if self.AllCheckBox.isChecked() else [[]] 
             self.initialize_model()
             # logger.info('using model %s'%self.current_model)
             self.progress.setValue(20)
@@ -1274,7 +1282,22 @@ class AppDemo(QMainWindow):
                 do_3D = True
                 data = self.stack.copy()
             else:
-                data = self.stack[0].copy() # maybe chanchoose here 
+                data = []
+                if self.num_frames == 1: # single image
+                    data.append(self.stack[0].copy())
+                elif not self.AllCheckBox.isChecked(): # single frame 
+                    new_frame = self.frames_dir + "/frame" + str(self.curr_idx_frame - 1) + ".png"
+                    image = cv2.imread(new_frame, -1)
+                    image = image[np.newaxis,...]
+
+                    data.append(image[0].copy())
+                else: # multiple frames
+                    for idx in range(self.num_frames):
+                        new_frame = self.frames_dir + "/frame" + str(idx) + ".png"
+                        image = cv2.imread(new_frame, -1)
+                        image = image[np.newaxis,...]
+                        
+                        data.append(image[0].copy()) # maybe chanchoose here 
             channels = self.get_channels()
             self.diameter = float(self.Diameter.text())
             
@@ -1356,21 +1379,26 @@ class AppDemo(QMainWindow):
             #    flows = flows[0]
             
             # flows here are [RGB, dP, cellprob, p, bd, tr]
-            self.flows[0] = utils.to_8_bit(flows[0]) #RGB flow for plotting
-            self.flows[1] = utils.to_8_bit(flows[2]) #dist/prob for plotting
+            for flows_idx in range(len(self.flows)):
+                self.flows[flows_idx][0] = utils.to_8_bit(flows[flows_idx][0]) #RGB flow for plotting
+                self.flows[flows_idx][1] = utils.to_8_bit(flows[flows_idx][2]) #dist/prob for plotting
 
             if False: #self.boundary.isChecked():
-                self.flows[2] = utils.to_8_bit(flows[4]) #boundary for plotting
+                for flows_idx in range(len(self.flows)):
+                    self.flows[flows_idx][2] = utils.to_8_bit(flows[flows_idx][4]) #boundary for plotting
             else:
-                self.flows[2] = np.zeros_like(self.flows[1])
+                for flows_idx in range(len(self.flows)):
+                    self.flows[flows_idx][2] = np.zeros_like(self.flows[flows_idx][1])
 
             if not do_3D:
-                masks = masks[np.newaxis,...]
-                for i in range(3):
-                    self.flows[i] = resize_image(self.flows[i], masks.shape[-2], masks.shape[-1])
+                for flows_idx in range(len(self.flows)):
+                    self.masks[flows_idx] = masks[flows_idx][np.newaxis,...]
+                    for i in range(3):
+                        self.flows[flows_idx][i] = resize_image(self.flows[flows_idx][i], self.masks[flows_idx].shape[-2], self.masks[flows_idx].shape[-1])
                
                 #critical line from what I had commended out below
-                self.flows = [self.flows[n][np.newaxis,...] for n in range(len(self.flows))]
+                for flows_idx in range(len(self.flows)):
+                    self.flows[flows_idx] = [self.flows[flows_idx][n][np.newaxis,...] for n in range(len(self.flows[flows_idx]))]
             
             # I think this is a z-component placeholder. Relaceing with boundary output, will
             # put this back later for the 3D update 
@@ -1382,16 +1410,17 @@ class AppDemo(QMainWindow):
                 
 
             # this stores the original flow components for recomputing masks
-            if len(flows)>2: 
-                self.flows.append(flows[3].squeeze()) #p put in position -2
-                flws = [flows[1], #self.flows[-1][:self.dim] is dP
-                        flows[2][np.newaxis,...]] #self.flows[-1][self.dim] is dist/prob
-                if False: # self.boundary.isChecked():
-                    flws.append(flows[4][np.newaxis,...]) #self.flows[-1][self.dim+1] is bd
-                else:
-                    flws.append(np.zeros_like(flws[-1]))
-                
-                self.flows.append(np.concatenate(flws))
+            for flows_idx in range(len(self.flows)):
+                if len(flows[flows_idx])>2: 
+                    self.flows[flows_idx].append(flows[flows_idx][3].squeeze()) #p put in position -2
+                    flws = [flows[flows_idx][1], #self.flows[-1][:self.dim] is dP
+                            flows[flows_idx][2][np.newaxis,...]] #self.flows[-1][self.dim] is dist/prob
+                    if False: # self.boundary.isChecked():
+                        flws.append(flows[flows_idx][4][np.newaxis,...]) #self.flows[-1][self.dim+1] is bd
+                    else:
+                        flws.append(np.zeros_like(flws[-1]))
+                    
+                    self.flows[flows_idx].append(np.concatenate(flws))
 
             # logger.info('%d cells found with model in %0.3f sec'%(len(np.unique(masks)[1:]), time.time()-tic))
             self.progress.setValue(80)
@@ -1402,7 +1431,7 @@ class AppDemo(QMainWindow):
             # self.outlinesOn = True #again, this option should persist and not get toggled by another GUI action 
             # self.OCheckBox.setChecked(True)
 
-            iio._masks_to_gui(self, masks, outlines=None)
+            iio._masks_to_gui(self, self.masks[self.curr_idx_frame - 1 if len(self.masks) > 1 else 0], outlines=None)
             self.progress.setValue(100)
 
             # self.toggle_server(off=True)

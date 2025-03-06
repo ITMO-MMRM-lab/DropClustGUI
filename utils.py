@@ -12,7 +12,8 @@ import numpy as np
 import colorsys
 import io
 
-import metrics
+# from . import metrics
+import metrics  # TO WORK
 try:
     import omnipose, ncolor
     OMNI_INSTALLED = True
